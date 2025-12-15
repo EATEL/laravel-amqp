@@ -1,0 +1,12 @@
+<?php
+
+namespace {{ namespace }};
+
+use Rev\Amqp\AmqpConsumerServiceProvider;
+
+class {{ class }} extends AmqpConsumerServiceProvider
+{
+    protected array $listen = [
+        //
+    ];
+}

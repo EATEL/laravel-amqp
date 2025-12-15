@@ -88,7 +88,7 @@ class HealthCommand extends Command
         return spin(
             callback: function () use ($config) {
                 try {
-                    $amqpConfig = new AMQPConnectionConfig();
+                    $amqpConfig = new AMQPConnectionConfig;
                     $amqpConfig->setHost($config['host']);
                     $amqpConfig->setPort($config['port']);
                     $amqpConfig->setUser($config['user']);

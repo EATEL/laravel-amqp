@@ -27,7 +27,7 @@ class Amqp extends Facade
 {
     public static function fake(): FakeAmqp
     {
-        static::swap($fake = new FakeAmqp());
+        static::swap($fake = new FakeAmqp);
 
         return $fake;
     }

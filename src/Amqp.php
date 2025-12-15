@@ -2,22 +2,20 @@
 
 namespace Rev\Amqp;
 
-use PhpAmqpLib\Message\AMQPMessage;
-use PhpAmqpLib\Connection\AMQPConnectionConfig;
-use PhpAmqpLib\Connection\AMQPConnectionFactory;
-use PhpAmqpLib\Connection\AbstractConnection;
-use PhpAmqpLib\Exception\{
-    AMQPConnectionClosedException,
-    AMQPHeartbeatMissedException,
-    AMQPIOException,
-    AMQPSocketException,
-    AMQPTimeoutException,
-    AMQPRuntimeException,
-};
+use Closure;
 use Illuminate\Support\Facades\Log;
 use PhpAmqpLib\Channel\AMQPChannel;
+use PhpAmqpLib\Connection\AbstractConnection;
+use PhpAmqpLib\Connection\AMQPConnectionConfig;
+use PhpAmqpLib\Connection\AMQPConnectionFactory;
+use PhpAmqpLib\Exception\AMQPConnectionClosedException;
+use PhpAmqpLib\Exception\AMQPHeartbeatMissedException;
+use PhpAmqpLib\Exception\AMQPIOException;
+use PhpAmqpLib\Exception\AMQPRuntimeException;
+use PhpAmqpLib\Exception\AMQPSocketException;
+use PhpAmqpLib\Exception\AMQPTimeoutException;
+use PhpAmqpLib\Message\AMQPMessage;
 use Rev\Amqp\Contracts\Amqp as AmqpContract;
-use Closure;
 
 class Amqp implements AmqpContract
 {
@@ -100,7 +98,7 @@ class Amqp implements AmqpContract
      */
     private static function init(): void
     {
-        if (!self::$signalHandlersRegistered) {
+        if (! self::$signalHandlersRegistered) {
             self::setupCleanupHandlers();
             self::loadRetryConfig();
             self::$signalHandlersRegistered = true;
@@ -110,13 +108,12 @@ class Amqp implements AmqpContract
     /**
      * Publish a message to an exchange
      *
-     * @param mixed $payload The payload to publish (will be JSON encoded)
-     * @param string $exchange The exchange name
-     * @param string $routingKey The routing key
-     * @param array $messageProperties Additional message properties
-     * @param array $publishProperties Additional message properties
-     * @param string $connectionName The connection name to use
-     * @return void
+     * @param  mixed  $payload  The payload to publish (will be JSON encoded)
+     * @param  string  $exchange  The exchange name
+     * @param  string  $routingKey  The routing key
+     * @param  array  $messageProperties  Additional message properties
+     * @param  array  $publishProperties  Additional message properties
+     * @param  string  $connectionName  The connection name to use
      */
     public static function publish(
         $payload,
@@ -143,11 +140,10 @@ class Amqp implements AmqpContract
     /**
      * Consume messages from a queue
      *
-     * @param string $queue The queue name to consume from
-     * @param callable $callback The callback function to handle messages
-     * @param array $options Consumption options
-     * @param string $connectionName The connection name to use
-     * @return void
+     * @param  string  $queue  The queue name to consume from
+     * @param  callable  $callback  The callback function to handle messages
+     * @param  array  $options  Consumption options
+     * @param  string  $connectionName  The connection name to use
      */
     public static function consume(
         string $queue,
@@ -174,8 +170,9 @@ class Amqp implements AmqpContract
                 try {
                     // Check for shutdown signal before processing
                     if (self::$shouldShutdown) {
-                        Log::info("Shutdown signal received, cancelling consumer");
+                        Log::info('Shutdown signal received, cancelling consumer');
                         $channel->basic_cancel($message->getConsumerTag());
+
                         return;
                     }
 
@@ -187,13 +184,14 @@ class Amqp implements AmqpContract
                         try {
                             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
                         } catch (\JsonException $e) {
-                            Log::error("Failed to decode message JSON", [
+                            Log::error('Failed to decode message JSON', [
                                 'error' => $e->getMessage(),
                                 'body' => $body,
-                                'content_type' => $contentType
+                                'content_type' => $contentType,
                             ]);
                             // Reject message - it will be discarded or sent to DLQ
                             $message->nack(requeue: false, multiple: false);
+
                             return;
                         }
                     } else {
@@ -211,14 +209,14 @@ class Amqp implements AmqpContract
                     }
 
                     // Auto-acknowledge message unless no_ack is true
-                    if (!$options['no_ack']) {
+                    if (! $options['no_ack']) {
                         $message->ack();
                     }
                 } catch (\Exception $e) {
-                    Log::error("Error processing message", [
+                    Log::error('Error processing message', [
                         'error' => $e->getMessage(),
                         'trace' => $e->getTraceAsString(),
-                        'queue' => $queue
+                        'queue' => $queue,
                     ]);
 
                     // Reject and requeue message
@@ -240,7 +238,7 @@ class Amqp implements AmqpContract
             Log::info("Started consuming from queue '$queue'");
 
             // Keep consuming until cancelled or shutdown
-            while ($channel->is_consuming() && !self::$shouldShutdown) {
+            while ($channel->is_consuming() && ! self::$shouldShutdown) {
                 // Use a timeout on wait() to allow periodic shutdown checks
                 try {
                     $channel->wait(allowed_methods: null, non_blocking: false, timeout: 1);
@@ -306,7 +304,7 @@ class Amqp implements AmqpContract
      */
     private static function generateCorrelationId(): string
     {
-        return uniqid('rpc_', true) . '_' . mt_rand(1000, 9999);
+        return uniqid('rpc_', true).'_'.mt_rand(1000, 9999);
     }
 
     /**
@@ -359,7 +357,7 @@ class Amqp implements AmqpContract
      */
     private static function isChannelHealthyInternal(string $channelKey): bool
     {
-        if (!isset(self::$channels[$channelKey])) {
+        if (! isset(self::$channels[$channelKey])) {
             return false;
         }
 
@@ -367,15 +365,17 @@ class Amqp implements AmqpContract
             $channel = self::$channels[$channelKey];
 
             // Check if channel is still open
-            if (!$channel->is_open()) {
+            if (! $channel->is_open()) {
                 Log::debug("Channel $channelKey is not open");
+
                 return false;
             }
 
             // Check if the underlying connection is still healthy
             $connection = $channel->getConnection();
-            if (!$connection->isConnected()) {
+            if (! $connection->isConnected()) {
                 Log::debug("Channel $channelKey connection is not connected");
+
                 return false;
             }
 
@@ -383,8 +383,9 @@ class Amqp implements AmqpContract
         } catch (\Exception $e) {
             Log::debug("Channel $channelKey health check failed", [
                 'exception' => $e->getMessage(),
-                'type' => get_class($e)
+                'type' => get_class($e),
             ]);
+
             return false;
         }
     }
@@ -394,18 +395,20 @@ class Amqp implements AmqpContract
      */
     private static function isConnectionHealthy(string $name): bool
     {
-        if (!isset(self::$connections[$name])) {
+        if (! isset(self::$connections[$name])) {
             return false;
         }
 
         try {
             $connection = self::$connections[$name];
+
             return $connection->isConnected();
         } catch (\Exception $e) {
             Log::debug("AMQP connection '$name' health check failed", [
                 'exception' => $e->getMessage(),
-                'type' => get_class($e)
+                'type' => get_class($e),
             ]);
+
             return false;
         }
     }
@@ -418,7 +421,7 @@ class Amqp implements AmqpContract
         $attempts = self::$retryAttempts[$name] ?? 0;
         $maxAttempts = self::$retryConfig['max_attempts'];
 
-        while ($attempts < $maxAttempts && !self::$shouldShutdown) {
+        while ($attempts < $maxAttempts && ! self::$shouldShutdown) {
             try {
                 $connection = self::createConnection($name);
 
@@ -442,23 +445,23 @@ class Amqp implements AmqpContract
 
                 if ($attempts >= $maxAttempts || self::$shouldShutdown) {
                     if (self::$shouldShutdown) {
-                        throw new \RuntimeException("AMQP connection creation aborted due to shutdown signal");
+                        throw new \RuntimeException('AMQP connection creation aborted due to shutdown signal');
                     }
 
                     Log::error("AMQP connection '$name' failed after $maxAttempts attempts", [
                         'exception' => $e->getMessage(),
-                        'attempts' => $attempts
+                        'attempts' => $attempts,
                     ]);
                     throw $e;
                 }
 
                 $delay = self::calculateBackoffDelay($attempts);
                 Log::warning("AMQP connection '$name' failed, retrying in {$delay}s (attempt $attempts/$maxAttempts)", [
-                    'exception' => $e->getMessage()
+                    'exception' => $e->getMessage(),
                 ]);
 
                 // Sleep with shutdown check
-                for ($i = 0; $i < $delay && !self::$shouldShutdown; $i++) {
+                for ($i = 0; $i < $delay && ! self::$shouldShutdown; $i++) {
                     sleep(1);
                 }
             }
@@ -492,7 +495,7 @@ class Amqp implements AmqpContract
     private static function createConnection(string $name): AbstractConnection
     {
         // Cache config to avoid repeated config() calls
-        if (!isset(self::$configs[$name])) {
+        if (! isset(self::$configs[$name])) {
             self::$configs[$name] = self::buildConnectionConfig($name);
         }
 
@@ -504,7 +507,7 @@ class Amqp implements AmqpContract
      */
     private static function buildConnectionConfig(string $name): AMQPConnectionConfig
     {
-        $config = new AMQPConnectionConfig();
+        $config = new AMQPConnectionConfig;
         $config->setHost(config("amqp.connections.$name.host"));
         $config->setPort(config("amqp.connections.$name.port"));
         $config->setUser(config("amqp.connections.$name.user"));
@@ -527,7 +530,8 @@ class Amqp implements AmqpContract
     private static function shouldUseSecureConnection(string $name): bool
     {
         $host = config("amqp.connections.$name.host");
-        return !in_array($host, ['localhost', '127.0.0.1']);
+
+        return ! in_array($host, ['localhost', '127.0.0.1']);
     }
 
     /**
@@ -538,19 +542,20 @@ class Amqp implements AmqpContract
         $maxAttempts = self::$retryConfig['max_attempts'];
         $attempts = 0;
 
-        while ($attempts < $maxAttempts && !self::$shouldShutdown) {
+        while ($attempts < $maxAttempts && ! self::$shouldShutdown) {
             try {
                 $channel = self::getChannel($connectionName, $channelId);
+
                 return $callback($channel, ...$args);
             } catch (\Exception $e) {
                 $attempts++;
 
                 // Check if this is a connection-related exception
-                if (!self::shouldRetryException($e) || $attempts >= $maxAttempts || self::$shouldShutdown) {
+                if (! self::shouldRetryException($e) || $attempts >= $maxAttempts || self::$shouldShutdown) {
 
                     // Check shutdown before throwing the final exception
                     if (self::$shouldShutdown) {
-                        throw new \RuntimeException("AMQP operation aborted due to shutdown signal");
+                        throw new \RuntimeException('AMQP operation aborted due to shutdown signal');
                     }
 
                     throw $e;
@@ -559,7 +564,7 @@ class Amqp implements AmqpContract
                 Log::warning("AMQP operation failed, retrying (attempt $attempts/$maxAttempts)", [
                     'connection' => $connectionName,
                     'channel' => $channelId,
-                    'exception' => $e->getMessage()
+                    'exception' => $e->getMessage(),
                 ]);
 
                 // Mark connection and channel as failed so they get recreated
@@ -571,7 +576,7 @@ class Amqp implements AmqpContract
                 $delay = self::calculateBackoffDelay($attempts);
 
                 // Sleep with shutdown check
-                for ($i = 0; $i < $delay && !self::$shouldShutdown; $i++) {
+                for ($i = 0; $i < $delay && ! self::$shouldShutdown; $i++) {
                     sleep(1);
                 }
             }
@@ -579,7 +584,7 @@ class Amqp implements AmqpContract
 
         // Check shutdown before throwing the final exception
         if (self::$shouldShutdown) {
-            throw new \RuntimeException("AMQP operation aborted due to shutdown signal");
+            throw new \RuntimeException('AMQP operation aborted due to shutdown signal');
         }
         throw new \RuntimeException("AMQP operation failed after $maxAttempts attempts");
     }
@@ -591,16 +596,17 @@ class Amqp implements AmqpContract
     {
         $lastHeartbeatCheck = time();
 
-        while (!self::$shouldShutdown) {
+        while (! self::$shouldShutdown) {
             try {
                 $channel = self::getChannel($connectionName, $channelId);
 
                 // Check connection health periodically during consumption
                 if (time() - $lastHeartbeatCheck >= $heartbeatCheck) {
-                    if (!self::validateConnection($connectionName, true) || !self::isChannelHealthyInternal("$connectionName:$channelId")) {
+                    if (! self::validateConnection($connectionName, true) || ! self::isChannelHealthyInternal("$connectionName:$channelId")) {
                         Log::warning("AMQP connection/channel '$connectionName:$channelId' failed health check during consumption, reconnecting");
                         self::closeChannel($connectionName, $channelId);
                         self::closeConnection($connectionName);
+
                         continue;
                     }
                     $lastHeartbeatCheck = time();
@@ -616,15 +622,15 @@ class Amqp implements AmqpContract
             } catch (\Exception $e) {
                 // Check for shutdown before handling the error
                 if (self::$shouldShutdown) {
-                    Log::info("AMQP consumer shutting down due to signal");
+                    Log::info('AMQP consumer shutting down due to signal');
                     break;
                 }
 
-                Log::error("AMQP consumer error", [
+                Log::error('AMQP consumer error', [
                     'connection' => $connectionName,
                     'channel' => $channelId,
                     'exception' => $e->getMessage(),
-                    'type' => get_class($e)
+                    'type' => get_class($e),
                 ]);
 
                 // Close the failed channel and connection
@@ -632,7 +638,7 @@ class Amqp implements AmqpContract
                 self::closeConnection($connectionName);
 
                 // Check if this is a retryable exception
-                if (!self::shouldRetryException($e)) {
+                if (! self::shouldRetryException($e)) {
                     throw $e;
                 }
 
@@ -640,13 +646,13 @@ class Amqp implements AmqpContract
                 Log::info("Consumer will retry in {$delay}s");
 
                 // Sleep with shutdown check
-                for ($i = 0; $i < $delay && !self::$shouldShutdown; $i++) {
+                for ($i = 0; $i < $delay && ! self::$shouldShutdown; $i++) {
                     sleep(1);
                 }
             }
         }
 
-        Log::info("AMQP consumer loop exited");
+        Log::info('AMQP consumer loop exited');
     }
 
     /**
@@ -672,15 +678,16 @@ class Amqp implements AmqpContract
             'connection refused',
             'connection aborted',
             'socket is not connected',
-            'transport endpoint is not connected'
+            'transport endpoint is not connected',
         ];
 
         foreach ($networkErrors as $error) {
             if (strpos($message, $error) !== false) {
                 Log::debug('Detected network error, will retry', [
                     'exception' => $e->getMessage(),
-                    'type' => get_class($e)
+                    'type' => get_class($e),
                 ]);
+
                 return true;
             }
         }
@@ -746,7 +753,7 @@ class Amqp implements AmqpContract
      */
     private static function validateConnection(string $name = 'default', bool $deepCheck = false): bool
     {
-        if (!isset(self::$connections[$name])) {
+        if (! isset(self::$connections[$name])) {
             return false;
         }
 
@@ -754,7 +761,7 @@ class Amqp implements AmqpContract
             $connection = self::$connections[$name];
 
             // Basic check - only checks internal connection state
-            if (!$connection->isConnected()) {
+            if (! $connection->isConnected()) {
                 return false;
             }
 
@@ -765,11 +772,12 @@ class Amqp implements AmqpContract
 
             return true;
         } catch (\Exception $e) {
-            Log::debug("AMQP connection validation failed", [
+            Log::debug('AMQP connection validation failed', [
                 'connection' => $name,
                 'exception' => $e->getMessage(),
-                'type' => get_class($e)
+                'type' => get_class($e),
             ]);
+
             return false;
         }
     }
@@ -786,10 +794,10 @@ class Amqp implements AmqpContract
 
             return true;
         } catch (\Exception $e) {
-            Log::debug("AMQP deep connection check failed", [
+            Log::debug('AMQP deep connection check failed', [
                 'connection' => $name,
                 'exception' => $e->getMessage(),
-                'type' => get_class($e)
+                'type' => get_class($e),
             ]);
 
             // Mark connection as failed so it gets recreated
@@ -843,7 +851,7 @@ class Amqp implements AmqpContract
         $signalNames = [
             SIGTERM => 'SIGTERM',
             SIGINT => 'SIGINT',
-            SIGHUP => 'SIGHUP'
+            SIGHUP => 'SIGHUP',
         ];
 
         $signalName = $signalNames[$signal] ?? "Signal $signal";
@@ -867,11 +875,11 @@ class Amqp implements AmqpContract
             Log::error('AMQP Service: Fatal error occurred, closing connections', [
                 'error' => $error['message'],
                 'file' => $error['file'],
-                'line' => $error['line']
+                'line' => $error['line'],
             ]);
         }
 
-        if (!empty(self::$connections)) {
+        if (! empty(self::$connections)) {
             Log::info('AMQP Service: Application shutting down, closing connections');
             self::$shouldShutdown = true;
             self::closeConnections();

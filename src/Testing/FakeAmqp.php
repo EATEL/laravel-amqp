@@ -3,7 +3,6 @@
 namespace Rev\Amqp\Testing;
 
 use Closure;
-use PhpAmqpLib\Message\AMQPMessage;
 use PHPUnit\Framework\Assert;
 use Rev\Amqp\Contracts\Amqp as AmqpContract;
 
@@ -32,9 +31,7 @@ class FakeAmqp implements AmqpContract
         string $queue,
         Closure $callback,
         array $options = [],
-    ): void {
-    }
-
+    ): void {}
 
     public function fakeRpcResponse(string $exchange, string $routingKey, mixed $response): self
     {

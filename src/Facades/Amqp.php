@@ -9,7 +9,7 @@ use Rev\Amqp\Testing\FakeAmqp;
 /**
  * @method static void publish(mixed $payload, string $exchange, string $routingKey = '', array $properties = [])
  * @method static void publishToQueue(mixed $payload, string $queue, array $properties = [])
- * @method static void consume(string $queue, \Closure $callback, array $options = [])
+ * @method static void consume(string $queue, \Closure $callback, array $options = [], string $connectionName = 'default')
  * @method static mixed rpc(mixed $payload, string $exchange, string $routingKey, int $timeout = 30)
  * @method static void replyTo(\PhpAmqpLib\Message\AMQPMessage $request, mixed $response)
  * @method static void disconnect()
@@ -27,7 +27,7 @@ class Amqp extends Facade
 {
     public static function fake(): FakeAmqp
     {
-        static::swap($fake = new FakeAmqp);
+        static::swap($fake = new FakeAmqp());
 
         return $fake;
     }

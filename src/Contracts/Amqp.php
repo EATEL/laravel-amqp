@@ -15,24 +15,13 @@ interface Amqp
      * @param  string  $routingKey  The routing key
      * @param  array  $properties  Additional message properties
      */
-    public function publish(
-        mixed $payload,
+    public static function publish(
+        $payload,
         string $exchange,
         string $routingKey = '',
-        array $properties = [],
-    ): void;
-
-    /**
-     * Publish a message directly to a queue (using default exchange).
-     *
-     * @param  mixed  $payload  The payload to publish (will be JSON encoded)
-     * @param  string  $queue  The queue name
-     * @param  array  $properties  Additional message properties
-     */
-    public function publishToQueue(
-        mixed $payload,
-        string $queue,
-        array $properties = [],
+        array $messageProperties = [],
+        array $publishOptions = [],
+        string $connectionName = 'default'
     ): void;
 
     /**
@@ -45,35 +34,12 @@ interface Amqp
      * @param  Closure  $callback  The callback to process messages
      * @param  array  $options  Consumer options (prefetch_count, timeout, on_error, consumer_tag)
      */
-    public function consume(
+    public static function consume(
         string $queue,
         Closure $callback,
         array $options = [],
+        string $connectionName = 'default'
     ): void;
-
-    /**
-     * Publish a message and wait for a response (RPC pattern).
-     *
-     * @param  mixed  $payload  The request payload
-     * @param  string  $exchange  The exchange name
-     * @param  string  $routingKey  The routing key
-     * @param  int  $timeout  Timeout in seconds
-     * @return mixed The response payload
-     */
-    public function rpc(
-        mixed $payload,
-        string $exchange,
-        string $routingKey,
-        int $timeout = 30,
-    ): mixed;
-
-    /**
-     * Reply to an RPC request.
-     *
-     * @param  AMQPMessage  $request  The original request message
-     * @param  mixed  $response  The response payload
-     */
-    public function replyTo(AMQPMessage $request, mixed $response): void;
 
     /**
      * Close all connections gracefully.

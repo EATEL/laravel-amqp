@@ -28,46 +28,13 @@ class FakeAmqp implements AmqpContract
         );
     }
 
-    public function publishToQueue(
-        mixed $payload,
-        string $queue,
-        array $properties = [],
-    ): void {
-        $this->published[] = new PublishedMessage(
-            payload: $payload,
-            exchange: '',
-            routingKey: $queue,
-            properties: $properties,
-            isQueuePublish: true,
-        );
-    }
-
     public function consume(
         string $queue,
         Closure $callback,
         array $options = [],
-    ): void {}
-
-    public function rpc(
-        mixed $payload,
-        string $exchange,
-        string $routingKey,
-        int $timeout = 30,
-    ): mixed {
-        $key = "{$exchange}:{$routingKey}";
-
-        if (isset($this->rpcResponses[$key])) {
-            $response = $this->rpcResponses[$key];
-
-            return $response instanceof Closure ? $response($payload) : $response;
-        }
-
-        return null;
+    ): void {
     }
 
-    public function replyTo(AMQPMessage $request, mixed $response): void {}
-
-    public function disconnect(): void {}
 
     public function fakeRpcResponse(string $exchange, string $routingKey, mixed $response): self
     {

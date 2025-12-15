@@ -8,7 +8,7 @@
         "rabbitmq",
         "messaging"
     ],
-    "homepage": "https://github.com/rev/laravel-amqp",
+    "homepage": "https://github.com/eatel/laravel-amqp",
     "license": "MIT",
     "authors": [
         {

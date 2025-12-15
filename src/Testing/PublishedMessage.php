@@ -10,5 +10,6 @@ readonly class PublishedMessage
         public string $routingKey,
         public array $properties,
         public bool $isQueuePublish = false,
-    ) {}
+    ) {
+    }
 }

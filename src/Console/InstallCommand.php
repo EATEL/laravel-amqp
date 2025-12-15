@@ -173,7 +173,7 @@ class InstallCommand extends Command
         return spin(
             callback: function () {
                 try {
-                    $config = new AMQPConnectionConfig;
+                    $config = new AMQPConnectionConfig();
                     $config->setHost($this->connectionConfig['host']);
                     $config->setPort($this->connectionConfig['port']);
                     $config->setUser($this->connectionConfig['user']);

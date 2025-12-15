@@ -2,13 +2,13 @@
 
 namespace Rev\Amqp;
 
-use Spatie\LaravelPackageTools\Package;
-use Spatie\LaravelPackageTools\PackageServiceProvider;
 use Rev\Amqp\Console\ConsumeCommand;
-use Rev\Amqp\Console\InstallCommand;
 use Rev\Amqp\Console\HealthCommand;
+use Rev\Amqp\Console\InstallCommand;
 use Rev\Amqp\Contracts\Amqp as AmqpContract;
 use Rev\Amqp\Exceptions\AmqpConfigException;
+use Spatie\LaravelPackageTools\Package;
+use Spatie\LaravelPackageTools\PackageServiceProvider;
 
 class AmqpServiceProvider extends PackageServiceProvider
 {
@@ -56,7 +56,7 @@ class AmqpServiceProvider extends PackageServiceProvider
     {
         $connection = $config['connection'] ?? [];
 
-        if (!empty($connection['url'])) {
+        if (! empty($connection['url'])) {
             return;
         }
 

@@ -87,6 +87,7 @@ class Amqp implements AmqpContract
                 if ($this->shouldShutdown) {
                     $this->log('info', 'Shutdown signal received, cancelling consumer');
                     $channel->basic_cancel($message->getConsumerTag());
+
                     return;
                 }
 
@@ -126,7 +127,7 @@ class Amqp implements AmqpContract
 
             $this->log('info', "Started consuming from queue '{$queue}'");
 
-            while ($channel->is_consuming() && !$this->shouldShutdown) {
+            while ($channel->is_consuming() && ! $this->shouldShutdown) {
                 try {
                     $channel->wait(null, false, $options['timeout'] ?: null);
                 } catch (AMQPTimeoutException) {
@@ -160,7 +161,7 @@ class Amqp implements AmqpContract
             $message, $exchange, $routingKey, $correlationId, $timeout,
             &$response, &$responseReceived, &$responseError
         ) {
-            $consumerTag = 'rpc_' . $correlationId;
+            $consumerTag = 'rpc_'.$correlationId;
 
             $channel->basic_consume(
                 queue: 'amq.rabbitmq.reply-to',
@@ -189,7 +190,7 @@ class Amqp implements AmqpContract
             );
 
             $channel->basic_publish($message, $exchange, $routingKey);
-            $this->log('debug', "Published RPC request", [
+            $this->log('debug', 'Published RPC request', [
                 'exchange' => $exchange,
                 'routing_key' => $routingKey,
                 'correlation_id' => $correlationId,
@@ -197,7 +198,7 @@ class Amqp implements AmqpContract
 
             $startTime = time();
 
-            while (!$responseReceived && !$this->shouldShutdown) {
+            while (! $responseReceived && ! $this->shouldShutdown) {
                 $elapsed = time() - $startTime;
 
                 if ($elapsed >= $timeout) {
@@ -309,11 +310,11 @@ class Amqp implements AmqpContract
     {
         try {
             $channel = $this->getChannel();
-            if (!$channel->is_open()) {
+            if (! $channel->is_open()) {
                 throw new AmqpException('Failed to open channel. Please check your connection settings.');
             }
             $connection = $channel->getConnection();
-            if ($connection === null || !$connection->isConnected()) {
+            if ($connection === null || ! $connection->isConnected()) {
                 throw new AmqpException('Failed to establish connection. Please verify your AMQP connection settings (host, port, credentials).');
             }
         } catch (\Throwable $e) {
@@ -323,7 +324,7 @@ class Amqp implements AmqpContract
             }
             $host = $this->config['connection']['host'] ?? 'unknown';
             $port = $this->config['connection']['port'] ?? 'unknown';
-            throw new AmqpException("Failed to connect to AMQP server at {$host}:{$port}. Error: " . $e->getMessage(), 0, $e);
+            throw new AmqpException("Failed to connect to AMQP server at {$host}:{$port}. Error: ".$e->getMessage(), 0, $e);
         }
     }
 
@@ -331,7 +332,7 @@ class Amqp implements AmqpContract
     {
         $connConfig = $this->config['connection'];
 
-        if (!empty($connConfig['url'])) {
+        if (! empty($connConfig['url'])) {
             $parsedUrl = ConnectionUrlParser::parse($connConfig['url']);
             $connConfig = array_merge($connConfig, $parsedUrl);
 
@@ -343,7 +344,7 @@ class Amqp implements AmqpContract
             }
         }
 
-        $config = new AMQPConnectionConfig();
+        $config = new AMQPConnectionConfig;
         $config->setHost($connConfig['host']);
         $config->setPort($connConfig['port']);
         $config->setUser($connConfig['user']);
@@ -361,7 +362,7 @@ class Amqp implements AmqpContract
             }
             $config->setSslVerify($connConfig['ssl']['verify_peer'] ?? true);
         } else {
-            $config->setIsSecure(!in_array($connConfig['host'], ['localhost', '127.0.0.1']));
+            $config->setIsSecure(! in_array($connConfig['host'], ['localhost', '127.0.0.1']));
         }
 
         return AMQPConnectionFactory::create($config);
@@ -397,15 +398,16 @@ class Amqp implements AmqpContract
         $maxAttempts = $retryConfig['max_attempts'];
         $attempts = 0;
 
-        while ($attempts < $maxAttempts && !$this->shouldShutdown) {
+        while ($attempts < $maxAttempts && ! $this->shouldShutdown) {
             try {
                 $channel = $this->getChannel();
+
                 return $callback($channel);
             } catch (\Throwable $e) {
                 $attempts++;
 
                 // @phpstan-ignore booleanOr.rightAlwaysFalse (signal handlers can modify shouldShutdown asynchronously)
-                if (!$this->shouldRetry($e) || $attempts >= $maxAttempts || $this->shouldShutdown) {
+                if (! $this->shouldRetry($e) || $attempts >= $maxAttempts || $this->shouldShutdown) {
                     // @phpstan-ignore if.alwaysFalse (signal handlers can modify shouldShutdown asynchronously)
                     if ($this->shouldShutdown) {
                         throw new AmqpException('AMQP operation aborted due to shutdown signal');
@@ -431,7 +433,7 @@ class Amqp implements AmqpContract
     {
         $retryConfig = $this->config['retry'];
 
-        while (!$this->shouldShutdown) {
+        while (! $this->shouldShutdown) {
             try {
                 $channel = $this->getChannel();
                 $callback($channel);
@@ -447,7 +449,7 @@ class Amqp implements AmqpContract
                     'error' => $e->getMessage(),
                 ]);
 
-                if (!$this->shouldRetry($e)) {
+                if (! $this->shouldRetry($e)) {
                     throw $e;
                 }
 
@@ -463,7 +465,7 @@ class Amqp implements AmqpContract
     protected function shouldRetry(\Throwable $e): bool
     {
         $message = strtolower($e->getMessage());
-        
+
         $nonRetryableErrors = [
             'access_refused',
             'authentication',
@@ -505,21 +507,21 @@ class Amqp implements AmqpContract
     protected function calculateBackoffDelay(int $attempt, array $retryConfig): int
     {
         $multiplier = $retryConfig['multiplier'] ?? $retryConfig['backoff_multiplier'] ?? 2;
-        
+
         $delay = min(
             $retryConfig['initial_delay'] * pow($multiplier, $attempt - 1),
             $retryConfig['max_delay']
         );
 
         $jitter = $delay * 0.1;
-        $delay += mt_rand((int)(-$jitter * 100), (int)($jitter * 100)) / 100;
+        $delay += mt_rand((int) (-$jitter * 100), (int) ($jitter * 100)) / 100;
 
-        return max(1, (int)$delay);
+        return max(1, (int) $delay);
     }
 
     protected function sleepWithShutdownCheck(int $seconds): void
     {
-        for ($i = 0; $i < $seconds && !$this->shouldShutdown; $i++) {
+        for ($i = 0; $i < $seconds && ! $this->shouldShutdown; $i++) {
             sleep(1);
         }
     }
@@ -544,7 +546,7 @@ class Amqp implements AmqpContract
             return;
         }
 
-        if (!extension_loaded('pcntl')) {
+        if (! extension_loaded('pcntl')) {
             return;
         }
 
@@ -555,7 +557,7 @@ class Amqp implements AmqpContract
                 SIGHUP => 'SIGHUP',
             ];
 
-            $this->log('info', 'Received ' . ($signalNames[$signal] ?? "signal {$signal}") . ', initiating graceful shutdown');
+            $this->log('info', 'Received '.($signalNames[$signal] ?? "signal {$signal}").', initiating graceful shutdown');
             $this->shouldShutdown = true;
         };
 
@@ -572,12 +574,12 @@ class Amqp implements AmqpContract
 
     protected function generateCorrelationId(): string
     {
-        return uniqid('rpc_', true) . '_' . mt_rand(1000, 9999);
+        return uniqid('rpc_', true).'_'.mt_rand(1000, 9999);
     }
 
     protected function log(string $level, string $message, array $context = []): void
     {
-        if (!($this->config['logging']['enabled'] ?? true)) {
+        if (! ($this->config['logging']['enabled'] ?? true)) {
             return;
         }
 
@@ -590,4 +592,3 @@ class Amqp implements AmqpContract
         }
     }
 }
-

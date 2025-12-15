@@ -18,7 +18,7 @@ class ConnectionUrlParser
     {
         $parts = parse_url($url);
 
-        if ($parts === false || !isset($parts['scheme']) || !isset($parts['host'])) {
+        if ($parts === false || ! isset($parts['scheme']) || ! isset($parts['host'])) {
             throw new \InvalidArgumentException("Invalid AMQP URL: {$url}");
         }
 
@@ -43,7 +43,6 @@ class ConnectionUrlParser
         ];
     }
 
-
     public static function build(array $config): string
     {
         $scheme = ($config['ssl']['enabled'] ?? false) ? 'amqps' : 'amqp';
@@ -53,9 +52,8 @@ class ConnectionUrlParser
         $port = $config['port'] ?? 5672;
         $vhost = $config['vhost'] ?? '/';
 
-        $vhostPath = $vhost === '/' ? '' : '/' . urlencode($vhost);
+        $vhostPath = $vhost === '/' ? '' : '/'.urlencode($vhost);
 
         return "{$scheme}://{$user}:{$password}@{$host}:{$port}{$vhostPath}";
     }
 }
-

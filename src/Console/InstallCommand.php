@@ -34,22 +34,22 @@ class InstallCommand extends Command
 
         $this->publishConfiguration();
 
-        if (!$this->option('no-interaction')) {
+        if (! $this->option('no-interaction')) {
             $this->gatherConnectionDetails();
         } else {
             $this->useDefaults();
         }
 
-        if (!$this->option('no-interaction') && confirm('Would you like to test the connection?', default: true)) {
+        if (! $this->option('no-interaction') && confirm('Would you like to test the connection?', default: true)) {
             $success = $this->testConnection();
-            if (!$success) {
-                if (!confirm('Connection failed. Continue anyway?', default: false)) {
+            if (! $success) {
+                if (! confirm('Connection failed. Continue anyway?', default: false)) {
                     return self::FAILURE;
                 }
             }
         }
 
-        if (!$this->option('no-interaction') && confirm('Create an AMQP consumer service provider?', default: true)) {
+        if (! $this->option('no-interaction') && confirm('Create an AMQP consumer service provider?', default: true)) {
             $this->createConsumerServiceProvider();
         }
 
@@ -64,8 +64,9 @@ class InstallCommand extends Command
     {
         $configPath = config_path('amqp.php');
 
-        if (File::exists($configPath) && !$this->option('force')) {
+        if (File::exists($configPath) && ! $this->option('force')) {
             info('Configuration file already exists.');
+
             return;
         }
 
@@ -110,9 +111,10 @@ class InstallCommand extends Command
                 if (empty($value)) {
                     return 'URL is required';
                 }
-                if (!str_starts_with($value, 'amqp://') && !str_starts_with($value, 'amqps://')) {
+                if (! str_starts_with($value, 'amqp://') && ! str_starts_with($value, 'amqps://')) {
                     return 'URL must start with amqp:// or amqps://';
                 }
+
                 return null;
             }
         );
@@ -171,7 +173,7 @@ class InstallCommand extends Command
         return spin(
             callback: function () {
                 try {
-                    $config = new AMQPConnectionConfig();
+                    $config = new AMQPConnectionConfig;
                     $config->setHost($this->connectionConfig['host']);
                     $config->setPort($this->connectionConfig['port']);
                     $config->setUser($this->connectionConfig['user']);
@@ -180,16 +182,18 @@ class InstallCommand extends Command
                     $config->setConnectionTimeout(5);
 
                     $isSecure = ($this->connectionConfig['ssl']['enabled'] ?? false)
-                        || !in_array($this->connectionConfig['host'], ['localhost', '127.0.0.1']);
+                        || ! in_array($this->connectionConfig['host'], ['localhost', '127.0.0.1']);
                     $config->setIsSecure($isSecure);
 
                     $connection = AMQPConnectionFactory::create($config);
                     $connection->close();
 
                     info('Connection successful!');
+
                     return true;
                 } catch (\Throwable $e) {
-                    error('Connection failed: ' . $e->getMessage());
+                    error('Connection failed: '.$e->getMessage());
+
                     return false;
                 }
             },
@@ -201,12 +205,13 @@ class InstallCommand extends Command
     {
         $providerPath = app_path('Providers/AmqpServiceProvider.php');
 
-        if (File::exists($providerPath) && !$this->option('force')) {
+        if (File::exists($providerPath) && ! $this->option('force')) {
             info('AmqpServiceProvider already exists.');
+
             return;
         }
 
-        $stub = File::get(__DIR__ . '/../../stubs/amqp-consumer-provider.stub');
+        $stub = File::get(__DIR__.'/../../stubs/amqp-consumer-provider.stub');
 
         $content = str_replace(
             ['{{ namespace }}', '{{ class }}'],
@@ -225,7 +230,7 @@ class InstallCommand extends Command
     {
         $envExamplePath = base_path('.env.example');
 
-        if (!File::exists($envExamplePath)) {
+        if (! File::exists($envExamplePath)) {
             return;
         }
 
@@ -257,4 +262,3 @@ class InstallCommand extends Command
         outro('Setup complete!');
     }
 }
-

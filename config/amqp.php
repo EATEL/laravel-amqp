@@ -83,4 +83,3 @@ return [
         'channel' => env('AMQP_LOG_CHANNEL'),
     ],
 ];
-

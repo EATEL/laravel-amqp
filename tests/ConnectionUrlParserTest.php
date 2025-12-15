@@ -124,4 +124,3 @@ describe('ConnectionUrlParser', function () {
         ConnectionUrlParser::parse('not-a-valid-url');
     })->throws(InvalidArgumentException::class);
 });
-

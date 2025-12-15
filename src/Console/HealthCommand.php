@@ -28,6 +28,7 @@ class HealthCommand extends Command
 
         if (empty($config)) {
             error('AMQP not configured. Run: php artisan amqp:install');
+
             return self::FAILURE;
         }
 
@@ -43,10 +44,12 @@ class HealthCommand extends Command
             }
 
             outro('AMQP is healthy.');
+
             return self::SUCCESS;
         } else {
-            error('✗ Connection failed: ' . $result['error']);
+            error('✗ Connection failed: '.$result['error']);
             outro('Check your configuration and try again.');
+
             return self::FAILURE;
         }
     }
@@ -55,7 +58,7 @@ class HealthCommand extends Command
     {
         $config = config('amqp.connection', []);
 
-        if (!empty($config['url'])) {
+        if (! empty($config['url'])) {
             $parsed = ConnectionUrlParser::parse($config['url']);
             $config = array_merge($config, $parsed);
         }
@@ -85,7 +88,7 @@ class HealthCommand extends Command
         return spin(
             callback: function () use ($config) {
                 try {
-                    $amqpConfig = new AMQPConnectionConfig();
+                    $amqpConfig = new AMQPConnectionConfig;
                     $amqpConfig->setHost($config['host']);
                     $amqpConfig->setPort($config['port']);
                     $amqpConfig->setUser($config['user']);
@@ -94,7 +97,7 @@ class HealthCommand extends Command
                     $amqpConfig->setConnectionTimeout(5);
 
                     $isSecure = ($config['ssl']['enabled'] ?? false)
-                        || !in_array($config['host'], ['localhost', '127.0.0.1']);
+                        || ! in_array($config['host'], ['localhost', '127.0.0.1']);
                     $amqpConfig->setIsSecure($isSecure);
 
                     $connection = AMQPConnectionFactory::create($amqpConfig);
@@ -135,4 +138,3 @@ class HealthCommand extends Command
         );
     }
 }
-

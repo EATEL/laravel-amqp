@@ -4,8 +4,8 @@ namespace Rev\Amqp\Console;
 
 use Illuminate\Console\Command;
 use PhpAmqpLib\Message\AMQPMessage;
-use Rev\Amqp\Contracts\Amqp;
 use Rev\Amqp\AmqpConsumerServiceProvider;
+use Rev\Amqp\Contracts\Amqp;
 
 class ConsumeCommand extends Command
 {
@@ -30,9 +30,9 @@ class ConsumeCommand extends Command
         $listeners = $this->getListenersForQueue($queue);
         $debugMode = $this->option('debug') || empty($listeners);
 
-        if (!$debugMode) {
+        if (! $debugMode) {
             $this->info("Starting consumer for queue: {$queue}");
-            $this->info('Listeners: ' . count($listeners));
+            $this->info('Listeners: '.count($listeners));
             foreach ($listeners as $listener) {
                 $this->line("  - {$listener}");
             }
@@ -76,7 +76,7 @@ class ConsumeCommand extends Command
     protected function consumeDebugMode(Amqp $amqp, string $queue, array $options): void
     {
         $amqp->consume($queue, function (array $payload, AMQPMessage $message) {
-            $this->line('[' . now()->toDateTimeString() . '] Received message');
+            $this->line('['.now()->toDateTimeString().'] Received message');
             $this->line(json_encode($payload, JSON_PRETTY_PRINT));
 
             return true;

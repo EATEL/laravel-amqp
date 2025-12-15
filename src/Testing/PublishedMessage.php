@@ -12,4 +12,3 @@ readonly class PublishedMessage
         public bool $isQueuePublish = false,
     ) {}
 }
-

@@ -3,8 +3,8 @@
 namespace Rev\Amqp\Testing;
 
 use Closure;
-use PHPUnit\Framework\Assert;
 use PhpAmqpLib\Message\AMQPMessage;
+use PHPUnit\Framework\Assert;
 use Rev\Amqp\Contracts\Amqp as AmqpContract;
 
 class FakeAmqp implements AmqpContract
@@ -46,8 +46,7 @@ class FakeAmqp implements AmqpContract
         string $queue,
         Closure $callback,
         array $options = [],
-    ): void {
-    }
+    ): void {}
 
     public function rpc(
         mixed $payload,
@@ -66,11 +65,9 @@ class FakeAmqp implements AmqpContract
         return null;
     }
 
-    public function replyTo(AMQPMessage $request, mixed $response): void {
-    }
+    public function replyTo(AMQPMessage $request, mixed $response): void {}
 
-    public function disconnect(): void {
-    }
+    public function disconnect(): void {}
 
     public function fakeRpcResponse(string $exchange, string $routingKey, mixed $response): self
     {
@@ -88,8 +85,8 @@ class FakeAmqp implements AmqpContract
 
         Assert::assertNotEmpty(
             $matching,
-            "No messages were published to exchange [{$exchange}]" .
-            ($routingKey ? " with routing key [{$routingKey}]" : '') . '.'
+            "No messages were published to exchange [{$exchange}]".
+            ($routingKey ? " with routing key [{$routingKey}]" : '').'.'
         );
 
         if ($callback) {
@@ -137,7 +134,7 @@ class FakeAmqp implements AmqpContract
     {
         Assert::assertEmpty(
             $this->published,
-            'Messages were published unexpectedly: ' . json_encode(
+            'Messages were published unexpectedly: '.json_encode(
                 array_map(fn ($m) => [
                     'exchange' => $m->exchange,
                     'routingKey' => $m->routingKey,
@@ -152,7 +149,7 @@ class FakeAmqp implements AmqpContract
         Assert::assertCount(
             $count,
             $this->published,
-            "Expected {$count} messages to be published, but " . count($this->published) . ' were published.'
+            "Expected {$count} messages to be published, but ".count($this->published).' were published.'
         );
     }
 
@@ -180,4 +177,3 @@ class FakeAmqp implements AmqpContract
         });
     }
 }
-

@@ -14,8 +14,11 @@ Add the following to the root of your `composer.json`:
     }
 ]
 ```
+
+and then run
+
 ```bash
-composer require rev/laravel-amqp@1.0.0
+composer require rev/laravel-amqp@v1.3.0
 ```
 
 Publish the configuration file:
@@ -73,10 +76,11 @@ Use the `Amqp` facade to publish messages to an exchange:
 ```php
 use Rev\Amqp\Amqp;
 
-// Basic publish
-Amqp::publish(['key' => 'value'], 'my_exchange', 'routing.key');
+// Basic publish with auto-generated message id
+$messageId = Amqp::publish(['key' => 'value'], 'my_exchange', 'routing.key');
 
 // With custom message properties
+$messageId = rand(0, 1e6)
 Amqp::publish(
     payload: ['user_id' => 123, 'action' => 'login'],
     exchange: 'user_events',
@@ -85,6 +89,7 @@ Amqp::publish(
         'content_type' => 'application/json',
         'delivery_mode' => 2, // Persistent
         'priority' => 5,
+        'message_id' => $messageId
     ],
     publishOptions: [
         'mandatory' => true,
@@ -143,6 +148,65 @@ Amqp::consume('my_queue', function ($payload, $message) {
     'nowait' => false,
 ]);
 ```
+
+## Event-Based Logging
+
+The package provides comprehensive event-based logging for both publishing and consuming operations. Events are always dispatched, allowing applications to implement custom logging logic through Laravel's event system.
+
+### Consumer Events
+
+The following events are dispatched during message consumption:
+
+- `Rev\Amqp\Events\MessageReceived` - Dispatched when a message is received and about to begin processing
+- `Rev\Amqp\Events\MessageProcessed` - Dispatched after successful processing
+- `Rev\Amqp\Events\MessageFailed` - Dispatched when processing fails
+- `Rev\Amqp\Events\ConsumerStarted` - Dispatched when consumption begins
+- `Rev\Amqp\Events\ConsumerStopped` - Dispatched when consumption ends
+
+### Publish Events
+
+- `Rev\Amqp\Events\MessagePublished` - Dispatched for each publish operation
+
+### Usage Examples
+
+**Consumer Logging:**
+```php
+use Rev\Amqp\Events\MessageReceived;
+use Rev\Amqp\Events\MessageFailed;
+
+// Log all received messages
+Event::listen(MessageReceived::class, function (MessageReceived $event) {
+    Log::info('AMQP Message received', [
+        'queue' => $event->queue,
+        'payload' => $event->payload,
+    ]);
+});
+
+// Log processing failures
+Event::listen(MessageFailed::class, function (MessageFailed $event) {
+    Log::error('AMQP Message processing failed', [
+        'queue' => $event->queue,
+        'error' => $event->exception->getMessage(),
+        'payload' => $event->payload,
+    ]);
+});
+```
+
+**Publish Logging:**
+```php
+use Rev\Amqp\Events\MessagePublished;
+
+// Log all publishes
+Event::listen(MessagePublished::class, function (MessagePublished $event) {
+    Log::info('AMQP Message published', [
+        'exchange' => $event->exchange,
+        'routing_key' => $event->routingKey,
+        'payload' => $event->payload,
+    ]);
+});
+```
+
+Events provide maximum flexibility - applications can implement any logging logic, monitoring, or additional processing they need without modifying the core AMQP functionality.
 
 ## Available Commands
 

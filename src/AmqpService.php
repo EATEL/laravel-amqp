@@ -2,7 +2,9 @@
 
 namespace Rev\Amqp;
 
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AbstractConnection;
 use PhpAmqpLib\Connection\AMQPConnectionConfig;
@@ -15,6 +17,12 @@ use PhpAmqpLib\Exception\AMQPSocketException;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use Rev\Amqp\Contracts\Amqp as AmqpContract;
+use Rev\Amqp\Events\ConsumerStarted;
+use Rev\Amqp\Events\ConsumerStopped;
+use Rev\Amqp\Events\MessageFailed;
+use Rev\Amqp\Events\MessageProcessed;
+use Rev\Amqp\Events\MessagePublished;
+use Rev\Amqp\Events\MessageReceived;
 use Rev\Amqp\Support\ConnectionUrlParser;
 
 class AmqpService implements AmqpContract
@@ -67,14 +75,6 @@ class AmqpService implements AmqpContract
         \ErrorException::class,
     ];
 
-    /**
-     * Default message properties for publishing
-     */
-    private array $defaultMessageProperties = [
-        'content_type' => 'application/json',
-        'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
-    ];
-
     private array $defaultPublishOptions = [
         'mandatory' => false,
     ];
@@ -93,6 +93,17 @@ class AmqpService implements AmqpContract
         $this->setupCleanupHandlers();
     }
 
+
+    private function defaultMessageProperties(array $messageProperties = []):  array {
+        $messageId = Str::ulid();
+        return array_merge([
+            'content_type' => 'application/json',
+            'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
+            'timestamp' => now()->timestamp,
+            'message_id' => $messageId,
+        ], $messageProperties);
+    }
+
     /**
      * Publish a message to an exchange
      *
@@ -101,7 +112,7 @@ class AmqpService implements AmqpContract
      * @param string $routingKey The routing key
      * @param array $messageProperties Additional message properties
      * @param array $publishOptions Additional publish options
-     * @return void
+     * @return string The message id.  If a `message_id` is in the messageProperties, it will be used otherwise one will be generated 
      */
     public function publish(
         mixed $payload,
@@ -109,17 +120,20 @@ class AmqpService implements AmqpContract
         string $routingKey = '',
         array $messageProperties = [],
         array $publishOptions = [],
-    ): void {
+    ): string {
         $json = json_encode($payload, JSON_THROW_ON_ERROR);
-        $messageProperties = array_merge($this->defaultMessageProperties, $messageProperties);
+        $messageProperties = $this->defaultMessageProperties($messageProperties);
         $publishOptions = array_merge($this->defaultPublishOptions, $publishOptions);
 
         $message = new AMQPMessage($json, $messageProperties);
 
-        $this->execute(function ($channel) use ($message, $exchange, $routingKey, $publishOptions) {
+        $this->execute(function ($channel) use ($message, $exchange, $routingKey, $publishOptions, $payload, $messageProperties) {
             $channel->basic_publish($message, $exchange, $routingKey, $publishOptions['mandatory']);
-            $this->log('debug', "Published message to exchange '$exchange' with routing key '$routingKey'");
+
+            // Dispatch publish event
+            Event::dispatch(new MessagePublished($payload, $exchange, $routingKey, $messageProperties['message_id'], $messageProperties, $publishOptions));
         });
+        return $messageProperties['messageId'];
     }
 
     /**
@@ -148,6 +162,8 @@ class AmqpService implements AmqpContract
 
         $options = array_merge($defaultOptions, $options);
 
+        Event::dispatch(new ConsumerStarted($queue, $options));
+
         $this->executeConsumer(function (AMQPChannel $channel) use ($queue, $callback, $options) {
             // Wrap the user callback to handle JSON decoding and return value
             $wrappedCallback = function (AMQPMessage $message) use ($callback, $options, $queue, $channel) {
@@ -163,7 +179,7 @@ class AmqpService implements AmqpContract
                     $body = $message->getBody();
                     // Check content type and parse accordingly
                     $contentType = $message->get('content_type');
-                    if (true || $contentType === 'application/json') {
+                    if ($contentType === 'application/json' || $contentType === null) {
                         try {
                             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
                         } catch (\JsonException $e) {
@@ -181,8 +197,12 @@ class AmqpService implements AmqpContract
                         $payload = $body;
                     }
 
+                    Event::dispatch(new MessageReceived($payload, $message, $queue));
+
                     // Call user callback with payload and message
                     $result = $callback($payload, $message);
+
+                    Event::dispatch(new MessageProcessed($payload, $message, $queue, $result));
 
                     // If callback returns false, stop consuming
                     if ($result === false) {
@@ -194,7 +214,9 @@ class AmqpService implements AmqpContract
                     if (!$options['no_ack']) {
                         $message->ack();
                     }
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
+                    Event::dispatch(new MessageFailed($payload ?? [], $message, $queue, $e));
+
                     $this->log('error', "Error processing message", [
                         'error' => $e->getMessage(),
                         'trace' => $e->getTraceAsString(),
@@ -232,6 +254,8 @@ class AmqpService implements AmqpContract
 
             $this->log('info', "Stopped consuming from queue '$queue'");
         }, 'consumer', $options['heartbeat_check']);
+
+        Event::dispatch(new ConsumerStopped($queue));
     }
 
     /**

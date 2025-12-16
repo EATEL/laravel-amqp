@@ -4,6 +4,7 @@ namespace Rev\Amqp;
 
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AbstractConnection;
 use PhpAmqpLib\Connection\AMQPConnectionConfig;
@@ -74,14 +75,6 @@ class AmqpService implements AmqpContract
         \ErrorException::class,
     ];
 
-    /**
-     * Default message properties for publishing
-     */
-    private array $defaultMessageProperties = [
-        'content_type' => 'application/json',
-        'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
-    ];
-
     private array $defaultPublishOptions = [
         'mandatory' => false,
     ];
@@ -100,6 +93,17 @@ class AmqpService implements AmqpContract
         $this->setupCleanupHandlers();
     }
 
+
+    private function defaultMessageProperties(array $messageProperties = []):  array {
+        $messageId = Str::ulid();
+        return array_merge([
+            'content_type' => 'application/json',
+            'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
+            'timestamp' => now()->timestamp,
+            'message_id' => $messageId,
+        ], $messageProperties);
+    }
+
     /**
      * Publish a message to an exchange
      *
@@ -108,7 +112,7 @@ class AmqpService implements AmqpContract
      * @param string $routingKey The routing key
      * @param array $messageProperties Additional message properties
      * @param array $publishOptions Additional publish options
-     * @return void
+     * @return string The message id.  If a `message_id` is in the messageProperties, it will be used otherwise one will be generated 
      */
     public function publish(
         mixed $payload,
@@ -116,9 +120,9 @@ class AmqpService implements AmqpContract
         string $routingKey = '',
         array $messageProperties = [],
         array $publishOptions = [],
-    ): void {
+    ): string {
         $json = json_encode($payload, JSON_THROW_ON_ERROR);
-        $messageProperties = array_merge($this->defaultMessageProperties, $messageProperties);
+        $messageProperties = $this->defaultMessageProperties($messageProperties);
         $publishOptions = array_merge($this->defaultPublishOptions, $publishOptions);
 
         $message = new AMQPMessage($json, $messageProperties);
@@ -127,8 +131,9 @@ class AmqpService implements AmqpContract
             $channel->basic_publish($message, $exchange, $routingKey, $publishOptions['mandatory']);
 
             // Dispatch publish event
-            Event::dispatch(new MessagePublished($payload, $exchange, $routingKey, $messageProperties, $publishOptions));
+            Event::dispatch(new MessagePublished($payload, $exchange, $routingKey, $messageProperties['message_id'], $messageProperties, $publishOptions));
         });
+        return $messageProperties['messageId'];
     }
 
     /**

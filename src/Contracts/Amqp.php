@@ -12,7 +12,7 @@ interface Amqp
      * @param string $routingKey The routing key
      * @param array $messageProperties Additional message properties
      * @param array $publishOptions Publish options (mandatory, etc.)
-     * @return void
+     * @return string The message id.  If a `message_id` is in the messageProperties, it will be used otherwise one will be generated 
      */
     public function publish(
         mixed $payload,
@@ -20,7 +20,7 @@ interface Amqp
         string $routingKey = '',
         array $messageProperties = [],
         array $publishOptions = [],
-    ): void;
+    ): string;
 
     /**
      * Consume messages from a queue

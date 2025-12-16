@@ -76,10 +76,11 @@ Use the `Amqp` facade to publish messages to an exchange:
 ```php
 use Rev\Amqp\Amqp;
 
-// Basic publish
-Amqp::publish(['key' => 'value'], 'my_exchange', 'routing.key');
+// Basic publish with auto-generated message id
+$messageId = Amqp::publish(['key' => 'value'], 'my_exchange', 'routing.key');
 
 // With custom message properties
+$messageId = rand(0, 1e6)
 Amqp::publish(
     payload: ['user_id' => 123, 'action' => 'login'],
     exchange: 'user_events',
@@ -88,6 +89,7 @@ Amqp::publish(
         'content_type' => 'application/json',
         'delivery_mode' => 2, // Persistent
         'priority' => 5,
+        'message_id' => $messageId
     ],
     publishOptions: [
         'mandatory' => true,

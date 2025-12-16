@@ -31,11 +31,11 @@ class AmqpServiceProvider extends PackageServiceProvider
 
             $this->validateConfig($config);
 
-            return new Amqp(config: $config);
+            return new AmqpService(config: $config);
         });
 
         $this->app->alias(AmqpContract::class, 'amqp');
-        $this->app->alias(AmqpContract::class, Amqp::class);
+        $this->app->alias(AmqpContract::class, AmqpService::class);
     }
 
     public function packageBooted(): void

@@ -1,6 +1,6 @@
 <?php
 
-use Rev\Amqp\Facades\Amqp;
+use Rev\Amqp\Amqp;
 
 it('can fake amqp publishing', function () {
     Amqp::fake();

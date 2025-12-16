@@ -17,13 +17,14 @@ class FakeAmqp implements AmqpContract
         mixed $payload,
         string $exchange,
         string $routingKey = '',
-        array $properties = [],
+        array $messageProperties = [],
+        array $publishOptions = [],
     ): void {
         $this->published[] = new PublishedMessage(
             payload: $payload,
             exchange: $exchange,
             routingKey: $routingKey,
-            properties: $properties,
+            properties: $messageProperties,
             isQueuePublish: false,
         );
     }
@@ -44,9 +45,19 @@ class FakeAmqp implements AmqpContract
 
     public function consume(
         string $queue,
-        Closure $callback,
+        callable $callback,
         array $options = [],
     ): void {}
+
+    public function getStats(): array
+    {
+        return [
+            'connected' => true,
+            'retry_attempts' => 0,
+        ];
+    }
+
+    public function closeConnections(): void {}
 
     public function rpc(
         mixed $payload,

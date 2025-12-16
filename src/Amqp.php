@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\Facade;
 use Rev\Amqp\Testing\FakeAmqp;
 
 /**
- * @method static void publish(mixed $payload, string $exchange, string $routingKey = '', array $messageProperties = [], array $publishOptions = [])
+ * @method static string publish(mixed $payload, string $exchange, string $routingKey = '', array $messageProperties = [], array $publishOptions = [])
  * @method static void consume(string $queue, callable $callback, array $options = [])
  * @method static array getStats()
  * @method static void closeConnections()

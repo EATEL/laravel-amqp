@@ -2,7 +2,6 @@
 
 namespace Rev\Amqp;
 
-use Closure;
 use Illuminate\Support\Facades\Log;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AbstractConnection;
@@ -16,323 +15,439 @@ use PhpAmqpLib\Exception\AMQPSocketException;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use Rev\Amqp\Contracts\Amqp as AmqpContract;
-use Rev\Amqp\Exceptions\AmqpException;
 use Rev\Amqp\Support\ConnectionUrlParser;
 
 class Amqp implements AmqpContract
 {
-    protected ?AbstractConnection $connection = null;
+    /**
+     * Connection instance
+     */
+    private ?AbstractConnection $connection = null;
 
-    protected ?AMQPChannel $channel = null;
+    /**
+     * Channel instances
+     */
+    private array $channels = [];
 
-    protected bool $shouldShutdown = false;
+    /**
+     * Connection configuration cache
+     */
+    private ?AMQPConnectionConfig $connectionConfig = null;
 
-    protected bool $signalHandlersRegistered = false;
+    /**
+     * Retry attempts counter
+     */
+    private int $retryAttempts = 0;
 
-    protected array $reconnectionExceptions = [
+    /**
+     * Flag to indicate if the service should shutdown
+     */
+    private bool $shouldShutdown = false;
+
+    /**
+     * Track if signal handlers are registered
+     */
+    private bool $signalHandlersRegistered = false;
+
+    /**
+     * Retry configuration
+     */
+    private array $retryConfig;
+
+    /**
+     * Exceptions that should trigger a reconnection attempt
+     */
+    private array $reconnectionExceptions = [
         AMQPConnectionClosedException::class,
         AMQPHeartbeatMissedException::class,
         AMQPIOException::class,
         AMQPSocketException::class,
         AMQPTimeoutException::class,
         AMQPRuntimeException::class,
+        \ErrorException::class,
+    ];
+
+    /**
+     * Default message properties for publishing
+     */
+    private array $defaultMessageProperties = [
+        'content_type' => 'application/json',
+        'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
+    ];
+
+    private array $defaultPublishOptions = [
+        'mandatory' => false,
     ];
 
     public function __construct(
         protected readonly array $config,
-    ) {}
+    ) {
+        $this->retryConfig = array_merge([
+            'max_attempts' => 5,
+            'initial_delay' => 1,    // seconds
+            'max_delay' => 30,       // seconds
+            'backoff_multiplier' => 2,
+            'jitter' => true,        // add randomness to prevent thundering herd
+        ], $config['retry'] ?? []);
 
+        $this->setupCleanupHandlers();
+    }
+
+    /**
+     * Publish a message to an exchange
+     *
+     * @param mixed $payload The payload to publish (will be JSON encoded)
+     * @param string $exchange The exchange name
+     * @param string $routingKey The routing key
+     * @param array $messageProperties Additional message properties
+     * @param array $publishOptions Additional publish options
+     * @return void
+     */
     public function publish(
         mixed $payload,
         string $exchange,
         string $routingKey = '',
-        array $properties = [],
+        array $messageProperties = [],
+        array $publishOptions = [],
     ): void {
-        $message = $this->createMessage($payload, $properties);
+        $json = json_encode($payload, JSON_THROW_ON_ERROR);
+        $messageProperties = array_merge($this->defaultMessageProperties, $messageProperties);
+        $publishOptions = array_merge($this->defaultPublishOptions, $publishOptions);
 
-        $this->executeWithRetry(function (AMQPChannel $channel) use ($message, $exchange, $routingKey) {
-            $channel->basic_publish($message, $exchange, $routingKey);
-            $this->log('debug', "Published message to exchange '{$exchange}' with routing key '{$routingKey}'");
+        $message = new AMQPMessage($json, $messageProperties);
+
+        $this->execute(function ($channel) use ($message, $exchange, $routingKey, $publishOptions) {
+            $channel->basic_publish($message, $exchange, $routingKey, $publishOptions['mandatory']);
+            $this->log('debug', "Published message to exchange '$exchange' with routing key '$routingKey'");
         });
     }
 
-    public function publishToQueue(
-        mixed $payload,
-        string $queue,
-        array $properties = [],
-    ): void {
-        $this->publish($payload, '', $queue, $properties);
-    }
-
+    /**
+     * Consume messages from a queue
+     *
+     * @param string $queue The queue name to consume from
+     * @param callable $callback The callback function to handle messages
+     * @param array $options Consumption options
+     * @return void
+     */
     public function consume(
         string $queue,
-        Closure $callback,
+        callable $callback,
         array $options = [],
     ): void {
         $this->registerSignalHandlers();
 
-        $options = array_merge([
-            'prefetch_count' => $this->config['consume']['prefetch_count'] ?? 1,
-            'timeout' => $this->config['consume']['timeout'] ?? 0,
-            'on_error' => $this->config['consume']['on_error'] ?? 'requeue',
+        $defaultOptions = [
             'consumer_tag' => '',
-        ], $options);
-
-        $this->validateConnection();
-
-        $this->executeConsumer(function (AMQPChannel $channel) use ($queue, $callback, $options) {
-            $channel->basic_qos(0, $options['prefetch_count'], false);
-
-            $wrappedCallback = function (AMQPMessage $message) use ($callback, $options, $queue, $channel) {
-                if ($this->shouldShutdown) {
-                    $this->log('info', 'Shutdown signal received, cancelling consumer');
-                    $channel->basic_cancel($message->getConsumerTag());
-
-                    return;
-                }
-
-                try {
-                    $payload = $this->decodeMessageBody($message);
-
-                    $this->log('debug', "Consuming message from queue '{$queue}'", [
-                        'payload_size' => strlen($message->getBody()),
-                    ]);
-
-                    $result = $callback($payload, $message);
-
-                    if ($result === false) {
-                        $channel->basic_cancel($message->getConsumerTag());
-                    }
-
-                    $message->ack();
-                } catch (\Throwable $e) {
-                    $this->log('error', 'Error processing message', [
-                        'error' => $e->getMessage(),
-                        'queue' => $queue,
-                    ]);
-
-                    $this->handleConsumeError($message, $options['on_error']);
-                }
-            };
-
-            $channel->basic_consume(
-                queue: $queue,
-                consumer_tag: $options['consumer_tag'],
-                no_local: false,
-                no_ack: false,
-                exclusive: false,
-                nowait: false,
-                callback: $wrappedCallback,
-            );
-
-            $this->log('info', "Started consuming from queue '{$queue}'");
-
-            while ($channel->is_consuming() && ! $this->shouldShutdown) {
-                try {
-                    $channel->wait(null, false, $options['timeout'] ?: null);
-                } catch (AMQPTimeoutException) {
-                    continue;
-                }
-            }
-
-            $this->log('info', "Stopped consuming from queue '{$queue}'");
-        });
-    }
-
-    public function rpc(
-        mixed $payload,
-        string $exchange,
-        string $routingKey,
-        int $timeout = 30,
-    ): mixed {
-        $correlationId = $this->generateCorrelationId();
-        $response = null;
-        $responseReceived = false;
-        $responseError = null;
-
-        $properties = [
-            'reply_to' => 'amq.rabbitmq.reply-to',
-            'correlation_id' => $correlationId,
+            'no_local' => false,
+            'no_ack' => false,
+            'exclusive' => false,
+            'nowait' => false,
+            'heartbeat_check' => 30,
         ];
 
-        $message = $this->createMessage($payload, $properties);
+        $options = array_merge($defaultOptions, $options);
 
-        return $this->executeWithRetry(function (AMQPChannel $channel) use (
-            $message, $exchange, $routingKey, $correlationId, $timeout,
-            &$response, &$responseReceived, &$responseError
-        ) {
-            $consumerTag = 'rpc_'.$correlationId;
-
-            $channel->basic_consume(
-                queue: 'amq.rabbitmq.reply-to',
-                consumer_tag: $consumerTag,
-                no_local: false,
-                no_ack: true,
-                exclusive: false,
-                nowait: false,
-                callback: function (AMQPMessage $replyMessage) use (
-                    $correlationId, &$responseReceived, &$response, &$responseError, $channel, $consumerTag
-                ) {
-                    if ($replyMessage->get('correlation_id') !== $correlationId) {
+        $this->executeConsumer(function (AMQPChannel $channel) use ($queue, $callback, $options) {
+            // Wrap the user callback to handle JSON decoding and return value
+            $wrappedCallback = function (AMQPMessage $message) use ($callback, $options, $queue, $channel) {
+                try {
+                    // Check for shutdown signal before processing
+                    if ($this->shouldShutdown) {
+                        $this->log('info', "Shutdown signal received, cancelling consumer");
+                        $channel->basic_cancel($message->getConsumerTag());
                         return;
                     }
 
-                    try {
-                        $response = $this->decodeMessageBody($replyMessage);
-                        $responseReceived = true;
-                        $channel->basic_cancel($consumerTag);
-                    } catch (\Throwable $e) {
-                        $responseError = $e;
-                        $responseReceived = true;
-                        $channel->basic_cancel($consumerTag);
+                    // Get message body
+                    $body = $message->getBody();
+                    // Check content type and parse accordingly
+                    $contentType = $message->get('content_type');
+                    if (true || $contentType === 'application/json') {
+                        try {
+                            $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+                        } catch (\JsonException $e) {
+                            $this->log('error', "Failed to decode message JSON", [
+                                'error' => $e->getMessage(),
+                                'body' => $body,
+                                'content_type' => $contentType
+                            ]);
+                            // Reject message - it will be discarded or sent to DLQ
+                            $message->nack(requeue: false, multiple: false);
+                            return;
+                        }
+                    } else {
+                        // Return raw body string for non-JSON content
+                        $payload = $body;
                     }
-                },
+
+                    // Call user callback with payload and message
+                    $result = $callback($payload, $message);
+
+                    // If callback returns false, stop consuming
+                    if ($result === false) {
+                        // Cancel the consumer to stop the loop
+                        $channel->basic_cancel($message->getConsumerTag());
+                    }
+
+                    // Auto-acknowledge message unless no_ack is true
+                    if (!$options['no_ack']) {
+                        $message->ack();
+                    }
+                } catch (\Exception $e) {
+                    $this->log('error', "Error processing message", [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                        'queue' => $queue
+                    ]);
+
+                    // Reject and requeue message
+                    $message->nack(requeue: false);
+                }
+            };
+
+            // Start consuming
+            $channel->basic_consume(
+                queue: $queue,
+                consumer_tag: $options['consumer_tag'],
+                no_local: $options['no_local'],
+                no_ack: $options['no_ack'],
+                exclusive: $options['exclusive'],
+                nowait: $options['nowait'],
+                callback: $wrappedCallback
             );
 
-            $channel->basic_publish($message, $exchange, $routingKey);
-            $this->log('debug', 'Published RPC request', [
-                'exchange' => $exchange,
-                'routing_key' => $routingKey,
-                'correlation_id' => $correlationId,
-            ]);
+            $this->log('info', "Started consuming from queue '$queue'");
 
-            $startTime = time();
-
-            while (! $responseReceived && ! $this->shouldShutdown) {
-                $elapsed = time() - $startTime;
-
-                if ($elapsed >= $timeout) {
-                    try {
-                        $channel->basic_cancel($consumerTag);
-                    } catch (\Throwable) {
-                    }
-
-                    throw new AmqpException("RPC call timed out after {$timeout} seconds");
-                }
-
+            // Keep consuming until cancelled or shutdown
+            while ($channel->is_consuming() && !$this->shouldShutdown) {
+                // Use a timeout on wait() to allow periodic shutdown checks
                 try {
-                    $channel->wait(null, false, min(1, $timeout - $elapsed));
-                } catch (AMQPTimeoutException) {
+                    $channel->wait(allowed_methods: null, non_blocking: false, timeout: 1);
+                } catch (\PhpAmqpLib\Exception\AMQPTimeoutException $e) {
+                    // Timeout is expected, continue the loop
                     continue;
                 }
             }
 
-            if ($this->shouldShutdown) {
-                throw new AmqpException('RPC call aborted due to shutdown signal');
-            }
-
-            if ($responseError !== null) {
-                throw $responseError;
-            }
-
-            return $response;
-        });
+            $this->log('info', "Stopped consuming from queue '$queue'");
+        }, 'consumer', $options['heartbeat_check']);
     }
 
-    public function replyTo(AMQPMessage $request, mixed $response): void
+    /**
+     * Get connection statistics
+     */
+    public function getStats(): array
     {
-        $replyTo = $request->get('reply_to');
-        $correlationId = $request->get('correlation_id');
-
-        if (empty($replyTo)) {
-            throw new AmqpException('Request message does not have a reply_to property');
-        }
-
-        if (empty($correlationId)) {
-            throw new AmqpException('Request message does not have a correlation_id property');
-        }
-
-        $properties = ['correlation_id' => $correlationId];
-        $message = $this->createMessage($response, $properties);
-
-        $this->executeWithRetry(function (AMQPChannel $channel) use ($message, $replyTo, $correlationId) {
-            $channel->basic_publish($message, '', $replyTo);
-            $this->log('debug', 'Sent RPC reply', [
-                'reply_to' => $replyTo,
-                'correlation_id' => $correlationId,
-            ]);
-        });
+        return [
+            'connected' => $this->isConnectionHealthy(),
+            'retry_attempts' => $this->retryAttempts,
+        ];
     }
 
-    public function disconnect(): void
+    /**
+     * Close all connections
+     */
+    public function closeConnections(): void
     {
         $this->log('info', 'Closing AMQP connections');
 
-        if ($this->channel !== null) {
-            try {
-                if ($this->channel->is_open()) {
-                    $this->channel->close();
-                }
-            } catch (\Throwable $e) {
-                $this->log('error', 'Error closing channel', ['error' => $e->getMessage()]);
-            }
-            $this->channel = null;
+        // Close all channels first
+        foreach (array_keys($this->channels) as $channelId) {
+            $this->closeChannel($channelId);
         }
 
-        if ($this->connection !== null) {
-            try {
-                if ($this->connection->isConnected()) {
-                    $this->connection->close();
-                }
-            } catch (\Throwable $e) {
-                $this->log('error', 'Error closing connection', ['error' => $e->getMessage()]);
-            }
-            $this->connection = null;
-        }
+        // Then close connection
+        $this->closeConnection();
+
+        $this->channels = [];
+        $this->retryAttempts = 0;
     }
 
-    protected function getConnection(): AbstractConnection
+    // ===== PRIVATE METHODS (Internal Connection Management) =====
+
+    /**
+     * Get or create an AMQP connection with automatic reconnection
+     */
+    private function getConnection(): AbstractConnection
     {
-        if ($this->connection !== null && $this->connection->isConnected()) {
+        // Return existing healthy connection
+        if ($this->connection !== null && $this->isConnectionHealthy()) {
             return $this->connection;
         }
 
-        $this->connection = $this->createConnection();
-
-        return $this->connection;
+        // Connection doesn't exist or is unhealthy - create/recreate it
+        return $this->createConnectionWithRetry();
     }
 
-    protected function getChannel(): AMQPChannel
+    /**
+     * Get or create an AMQP channel with automatic reconnection
+     */
+    private function getChannel(string $channelId = 'default'): AMQPChannel
     {
-        if ($this->channel !== null && $this->channel->is_open()) {
-            $connection = $this->channel->getConnection();
-            if ($connection !== null && $connection->isConnected()) {
-                return $this->channel;
-            }
+        // Return existing healthy channel
+        if (isset($this->channels[$channelId]) && $this->isChannelHealthyInternal($channelId)) {
+            return $this->channels[$channelId];
         }
 
-        $this->channel = $this->getConnection()->channel();
+        // Channel doesn't exist or is unhealthy - create/recreate it
+        $connection = $this->getConnection();
+        $channel = $connection->channel();
 
-        return $this->channel;
+        $this->channels[$channelId] = $channel;
+        $this->log('debug', "Created new AMQP channel: $channelId");
+
+        return $channel;
     }
 
-    protected function validateConnection(): void
+    /**
+     * Check if channel is healthy (internal method)
+     */
+    private function isChannelHealthyInternal(string $channelId): bool
     {
+        if (!isset($this->channels[$channelId])) {
+            return false;
+        }
+
         try {
-            $channel = $this->getChannel();
-            if (! $channel->is_open()) {
-                throw new AmqpException('Failed to open channel. Please check your connection settings.');
+            $channel = $this->channels[$channelId];
+
+            // Check if channel is still open
+            if (!$channel->is_open()) {
+                $this->log('debug', "Channel $channelId is not open");
+                return false;
             }
+
+            // Check if the underlying connection is still healthy
             $connection = $channel->getConnection();
-            if ($connection === null || ! $connection->isConnected()) {
-                throw new AmqpException('Failed to establish connection. Please verify your AMQP connection settings (host, port, credentials).');
+            if (!$connection->isConnected()) {
+                $this->log('debug', "Channel $channelId connection is not connected");
+                return false;
             }
-        } catch (\Throwable $e) {
-            $this->resetConnection();
-            if ($e instanceof AmqpException) {
-                throw $e;
-            }
-            $host = $this->config['connection']['host'] ?? 'unknown';
-            $port = $this->config['connection']['port'] ?? 'unknown';
-            throw new AmqpException("Failed to connect to AMQP server at {$host}:{$port}. Error: ".$e->getMessage(), 0, $e);
+
+            return true;
+        } catch (\Exception $e) {
+            $this->log('debug', "Channel $channelId health check failed", [
+                'exception' => $e->getMessage(),
+                'type' => get_class($e)
+            ]);
+            return false;
         }
     }
 
-    protected function createConnection(): AbstractConnection
+    /**
+     * Check if connection is healthy
+     */
+    private function isConnectionHealthy(): bool
+    {
+        if ($this->connection === null) {
+            return false;
+        }
+
+        try {
+            return $this->connection->isConnected();
+        } catch (\Exception $e) {
+            $this->log('debug', "AMQP connection health check failed", [
+                'exception' => $e->getMessage(),
+                'type' => get_class($e)
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Create connection with retry logic
+     */
+    private function createConnectionWithRetry(): AbstractConnection
+    {
+        $attempts = $this->retryAttempts;
+        $maxAttempts = $this->retryConfig['max_attempts'];
+
+        while ($attempts < $maxAttempts && !$this->shouldShutdown) {
+            try {
+                $connection = $this->createConnection();
+
+                // Success - reset retry counter and cache connection
+                $this->retryAttempts = 0;
+                $this->connection = $connection;
+
+                if ($attempts > 0) {
+                    $this->log('info', "AMQP connection restored after $attempts attempts");
+                }
+
+                return $connection;
+            } catch (\Exception $e) {
+                $attempts++;
+                $this->retryAttempts = $attempts;
+
+                // Remove failed connection from cache
+                $this->connection = null;
+
+                if ($attempts >= $maxAttempts || $this->shouldShutdown) {
+                    if ($this->shouldShutdown) {
+                        throw new \RuntimeException("AMQP connection creation aborted due to shutdown signal");
+                    }
+
+                    $this->log('error', "AMQP connection failed after $maxAttempts attempts", [
+                        'exception' => $e->getMessage(),
+                        'attempts' => $attempts
+                    ]);
+                    throw $e;
+                }
+
+                $delay = $this->calculateBackoffDelay($attempts);
+                $this->log('warning', "AMQP connection failed, retrying in {$delay}s (attempt $attempts/$maxAttempts)", [
+                    'exception' => $e->getMessage()
+                ]);
+
+                // Sleep with shutdown check
+                $this->sleepWithShutdownCheck($delay);
+            }
+        }
+
+        throw new \RuntimeException("Failed to establish AMQP connection - shutdown requested");
+    }
+
+    /**
+     * Calculate backoff delay with jitter
+     */
+    private function calculateBackoffDelay(int $attempt): int
+    {
+        $delay = min(
+            $this->retryConfig['initial_delay'] * pow($this->retryConfig['backoff_multiplier'], $attempt - 1),
+            $this->retryConfig['max_delay']
+        );
+
+        // Add jitter to prevent thundering herd problem
+        if ($this->retryConfig['jitter']) {
+            $jitter = $delay * 0.1; // 10% jitter
+            $delay += mt_rand(-$jitter * 100, $jitter * 100) / 100;
+        }
+
+        return max(1, (int) $delay);
+    }
+
+    /**
+     * Create a new AMQP connection
+     */
+    private function createConnection(): AbstractConnection
+    {
+        // Cache config to avoid repeated config building
+        if ($this->connectionConfig === null) {
+            $this->connectionConfig = $this->buildConnectionConfig();
+        }
+
+        return AMQPConnectionFactory::create($this->connectionConfig);
+    }
+
+    /**
+     * Build connection configuration
+     */
+    private function buildConnectionConfig(): AMQPConnectionConfig
     {
         $connConfig = $this->config['connection'];
 
-        if (! empty($connConfig['url'])) {
+        if (!empty($connConfig['url'])) {
             $parsedUrl = ConnectionUrlParser::parse($connConfig['url']);
             $connConfig = array_merge($connConfig, $parsedUrl);
 
@@ -344,17 +459,20 @@ class Amqp implements AmqpContract
             }
         }
 
-        $config = new AMQPConnectionConfig;
+        $config = new AMQPConnectionConfig();
         $config->setHost($connConfig['host']);
         $config->setPort($connConfig['port']);
         $config->setUser($connConfig['user']);
         $config->setPassword($connConfig['password']);
         $config->setVhost($connConfig['vhost']);
-        $config->setHeartbeat($connConfig['heartbeat'] ?? 60);
-        $config->setConnectionTimeout($connConfig['connection_timeout'] ?? 10);
-        $config->setReadTimeout($connConfig['read_timeout'] ?? 10);
-        $config->setWriteTimeout($connConfig['write_timeout'] ?? 10);
 
+        // Set connection and read timeouts for better failure detection
+        $config->setConnectionTimeout($connConfig['connection_timeout'] ?? 10);
+        $config->setReadTimeout($connConfig['read_timeout'] ?? 3);
+        $config->setWriteTimeout($connConfig['write_timeout'] ?? 3);
+        $config->setHeartbeat($connConfig['heartbeat'] ?? 10);
+
+        // Handle SSL configuration
         if ($connConfig['ssl']['enabled'] ?? false) {
             $config->setIsSecure(true);
             if (isset($connConfig['ssl']['cafile'])) {
@@ -362,141 +480,164 @@ class Amqp implements AmqpContract
             }
             $config->setSslVerify($connConfig['ssl']['verify_peer'] ?? true);
         } else {
-            $config->setIsSecure(! in_array($connConfig['host'], ['localhost', '127.0.0.1']));
+            $config->setIsSecure($this->shouldUseSecureConnection());
         }
 
-        return AMQPConnectionFactory::create($config);
+        return $config;
     }
 
-    protected function createMessage(mixed $payload, array $properties = []): AMQPMessage
+    /**
+     * Determine if connection should be secure based on host
+     */
+    private function shouldUseSecureConnection(): bool
     {
-        $json = json_encode($payload, JSON_THROW_ON_ERROR);
-
-        $defaultProperties = [
-            'content_type' => 'application/json',
-            'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
-        ];
-
-        return new AMQPMessage($json, array_merge($defaultProperties, $properties));
+        $host = $this->config['connection']['host'];
+        return !in_array($host, ['localhost', '127.0.0.1']);
     }
 
-    protected function decodeMessageBody(AMQPMessage $message): mixed
+    /**
+     * Execute a callback with automatic reconnection using a channel
+     */
+    private function execute(callable $callback, string $channelId = 'default', ...$args)
     {
-        $body = $message->getBody();
-        $contentType = $message->get('content_type');
-
-        if ($contentType === 'application/json') {
-            return json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-        }
-
-        return $body;
-    }
-
-    protected function executeWithRetry(Closure $callback): mixed
-    {
-        $retryConfig = $this->config['retry'];
-        $maxAttempts = $retryConfig['max_attempts'];
+        $maxAttempts = $this->retryConfig['max_attempts'];
         $attempts = 0;
 
-        while ($attempts < $maxAttempts && ! $this->shouldShutdown) {
+        while ($attempts < $maxAttempts && !$this->shouldShutdown) {
             try {
-                $channel = $this->getChannel();
-
-                return $callback($channel);
-            } catch (\Throwable $e) {
+                $channel = $this->getChannel($channelId);
+                return $callback($channel, ...$args);
+            } catch (\Exception $e) {
                 $attempts++;
 
-                // @phpstan-ignore booleanOr.rightAlwaysFalse (signal handlers can modify shouldShutdown asynchronously)
-                if (! $this->shouldRetry($e) || $attempts >= $maxAttempts || $this->shouldShutdown) {
-                    // @phpstan-ignore if.alwaysFalse (signal handlers can modify shouldShutdown asynchronously)
+                // Check if this is a connection-related exception
+                if (!$this->shouldRetryException($e) || $attempts >= $maxAttempts || $this->shouldShutdown) {
+
+                    // Check shutdown before throwing the final exception
                     if ($this->shouldShutdown) {
-                        throw new AmqpException('AMQP operation aborted due to shutdown signal');
+                        throw new \RuntimeException("AMQP operation aborted due to shutdown signal");
                     }
+
                     throw $e;
                 }
 
-                $this->log('warning', "AMQP operation failed, retrying (attempt {$attempts}/{$maxAttempts})", [
-                    'error' => $e->getMessage(),
+                $this->log('warning', "AMQP operation failed, retrying (attempt $attempts/$maxAttempts)", [
+                    'channel' => $channelId,
+                    'exception' => $e->getMessage()
                 ]);
 
-                $this->resetConnection();
+                // Mark connection and channel as failed so they get recreated
+                $this->closeChannel($channelId);
+                $this->connection = null;
 
-                $delay = $this->calculateBackoffDelay($attempts, $retryConfig);
+                $delay = $this->calculateBackoffDelay($attempts);
+
+                // Sleep with shutdown check
                 $this->sleepWithShutdownCheck($delay);
             }
         }
 
-        throw new AmqpException("AMQP operation failed after {$maxAttempts} attempts");
+        // Check shutdown before throwing the final exception
+        if ($this->shouldShutdown) {
+            throw new \RuntimeException("AMQP operation aborted due to shutdown signal");
+        }
+        throw new \RuntimeException("AMQP operation failed after $maxAttempts attempts");
     }
 
-    protected function executeConsumer(Closure $callback): void
+    /**
+     * Execute a consumer callback with automatic reconnection and heartbeat monitoring
+     */
+    private function executeConsumer(callable $callback, string $channelId = 'consumer', int $heartbeatCheck = 30, ...$args)
     {
-        $retryConfig = $this->config['retry'];
+        $lastHeartbeatCheck = time();
 
-        while (! $this->shouldShutdown) {
+        while (!$this->shouldShutdown) {
             try {
-                $channel = $this->getChannel();
-                $callback($channel);
-                break;
-            } catch (\Throwable $e) {
-                // @phpstan-ignore if.alwaysFalse (signal handlers can modify shouldShutdown asynchronously)
+                $channel = $this->getChannel($channelId);
+
+                // Check connection health periodically during consumption
+                if (time() - $lastHeartbeatCheck >= $heartbeatCheck) {
+                    if (!$this->validateConnection(true) || !$this->isChannelHealthyInternal($channelId)) {
+                        $this->log('warning', "AMQP connection/channel '$channelId' failed health check during consumption, reconnecting");
+                        $this->closeChannel($channelId);
+                        $this->closeConnection();
+                        continue;
+                    }
+                    $lastHeartbeatCheck = time();
+                }
+
+                // Execute the consumer callback
+                $result = $callback($channel, ...$args);
+
+                // If callback returns false, exit the consumer loop
+                if ($result === false) {
+                    break;
+                }
+            } catch (\Exception $e) {
+                // Check for shutdown before handling the error
                 if ($this->shouldShutdown) {
-                    $this->log('info', 'Consumer shutting down due to signal');
+                    $this->log('info', "AMQP consumer shutting down due to signal");
                     break;
                 }
 
-                $this->log('error', 'Consumer error', [
-                    'error' => $e->getMessage(),
+                $this->log('error', "AMQP consumer error", [
+                    'channel' => $channelId,
+                    'exception' => $e->getMessage(),
+                    'type' => get_class($e)
                 ]);
 
-                if (! $this->shouldRetry($e)) {
+                // Close the failed channel and connection
+                $this->closeChannel($channelId);
+                $this->closeConnection();
+
+                // Check if this is a retryable exception
+                if (!$this->shouldRetryException($e)) {
                     throw $e;
                 }
 
-                $this->resetConnection();
-
-                $delay = $this->calculateBackoffDelay(1, $retryConfig);
+                $delay = $this->calculateBackoffDelay($this->retryAttempts + 1);
                 $this->log('info', "Consumer will retry in {$delay}s");
+
+                // Sleep with shutdown check
                 $this->sleepWithShutdownCheck($delay);
             }
         }
+
+        $this->log('info', "AMQP consumer loop exited");
     }
 
-    protected function shouldRetry(\Throwable $e): bool
+    /**
+     * Check if exception should trigger a retry
+     */
+    private function shouldRetryException(\Exception $e): bool
     {
-        $message = strtolower($e->getMessage());
-
-        $nonRetryableErrors = [
-            'access_refused',
-            'authentication',
-            'invalid credentials',
-            'login failed',
-            'access denied',
-        ];
-
-        foreach ($nonRetryableErrors as $error) {
-            if (str_contains($message, $error)) {
-                return false;
-            }
-        }
-
         foreach ($this->reconnectionExceptions as $exceptionClass) {
             if ($e instanceof $exceptionClass) {
                 return true;
             }
         }
 
+        // Check for specific error messages that indicate network/connection issues
+        $message = strtolower($e->getMessage());
         $networkErrors = [
             'broken pipe',
             'connection reset by peer',
             'ssl operation failed',
             'connection timed out',
             'network is unreachable',
+            'no route to host',
             'connection refused',
+            'connection aborted',
+            'socket is not connected',
+            'transport endpoint is not connected'
         ];
 
         foreach ($networkErrors as $error) {
-            if (str_contains($message, $error)) {
+            if (strpos($message, $error) !== false) {
+                $this->log('debug', 'Detected network error, will retry', [
+                    'exception' => $e->getMessage(),
+                    'type' => get_class($e)
+                ]);
                 return true;
             }
         }
@@ -504,67 +645,151 @@ class Amqp implements AmqpContract
         return false;
     }
 
-    protected function calculateBackoffDelay(int $attempt, array $retryConfig): int
+    /**
+     * Close a specific channel
+     */
+    private function closeChannel(string $channelId = 'default'): void
     {
-        $multiplier = $retryConfig['multiplier'] ?? $retryConfig['backoff_multiplier'] ?? 2;
-
-        $delay = min(
-            $retryConfig['initial_delay'] * pow($multiplier, $attempt - 1),
-            $retryConfig['max_delay']
-        );
-
-        $jitter = $delay * 0.1;
-        $delay += mt_rand((int) (-$jitter * 100), (int) ($jitter * 100)) / 100;
-
-        return max(1, (int) $delay);
+        if (isset($this->channels[$channelId])) {
+            try {
+                if ($this->channels[$channelId]->is_open()) {
+                    $this->channels[$channelId]->close();
+                }
+                unset($this->channels[$channelId]);
+                $this->log('debug', "Closed AMQP channel: $channelId");
+            } catch (\Exception $e) {
+                $this->log('error', "Error closing AMQP channel $channelId", ['exception' => $e->getMessage()]);
+                // Remove from cache anyway
+                unset($this->channels[$channelId]);
+            }
+        }
     }
 
-    protected function sleepWithShutdownCheck(int $seconds): void
+    /**
+     * Close the connection
+     */
+    private function closeConnection(): void
     {
-        for ($i = 0; $i < $seconds && ! $this->shouldShutdown; $i++) {
+        // First close all channels
+        foreach (array_keys($this->channels) as $channelId) {
+            $this->closeChannel($channelId);
+        }
+
+        if ($this->connection !== null) {
+            try {
+                if ($this->connection->isConnected()) {
+                    $this->connection->close();
+                }
+                $this->connection = null;
+                $this->log('debug', "Closed AMQP connection");
+            } catch (\Exception $e) {
+                $this->log('error', "Error closing AMQP connection", ['exception' => $e->getMessage()]);
+                // Remove from cache anyway
+                $this->connection = null;
+            }
+        }
+
+        // Reset retry counter
+        $this->retryAttempts = 0;
+    }
+
+    /**
+     * Validate connection with optional deep health check
+     */
+    private function validateConnection(bool $deepCheck = false): bool
+    {
+        if ($this->connection === null) {
+            return false;
+        }
+
+        try {
+            // Basic check - only checks internal connection state
+            if (!$this->connection->isConnected()) {
+                return false;
+            }
+
+            // Deep check - actually tests the network connection
+            if ($deepCheck) {
+                return $this->performDeepConnectionCheck();
+            }
+
+            return true;
+        } catch (\Exception $e) {
+            $this->log('debug', "AMQP connection validation failed", [
+                'exception' => $e->getMessage(),
+                'type' => get_class($e)
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Perform a deep connection check that actually tests network connectivity
+     */
+    private function performDeepConnectionCheck(): bool
+    {
+        try {
+            // Test the connection by sending a heartbeat frame
+            // This will fail immediately if there are SSL/network issues
+            $this->connection->checkHeartBeat();
+
+            return true;
+        } catch (\Exception $e) {
+            $this->log('debug', "AMQP deep connection check failed", [
+                'exception' => $e->getMessage(),
+                'type' => get_class($e)
+            ]);
+
+            // Mark connection as failed so it gets recreated
+            $this->connection = null;
+
+            return false;
+        }
+    }
+
+    /**
+     * Sleep with shutdown check
+     */
+    private function sleepWithShutdownCheck(int $seconds): void
+    {
+        for ($i = 0; $i < $seconds && !$this->shouldShutdown; $i++) {
             sleep(1);
         }
     }
 
-    protected function resetConnection(): void
+    /**
+     * Set up all cleanup handlers (signals, shutdown, destructor)
+     */
+    private function setupCleanupHandlers(): void
     {
-        $this->channel = null;
-        $this->connection = null;
+        // Register shutdown function (works for most termination scenarios)
+        register_shutdown_function([$this, 'handleShutdown']);
+
+        // Register signal handlers if PCNTL extension is available
+        if (extension_loaded('pcntl')) {
+            $this->registerSignalHandlers();
+        }
     }
 
-    protected function handleConsumeError(AMQPMessage $message, string $onError): void
-    {
-        match ($onError) {
-            'reject' => $message->nack(requeue: false),
-            default => $message->nack(requeue: true),
-        };
-    }
-
-    protected function registerSignalHandlers(): void
+    /**
+     * Register signal handlers for graceful shutdown
+     */
+    private function registerSignalHandlers(): void
     {
         if ($this->signalHandlersRegistered) {
             return;
         }
 
-        if (! extension_loaded('pcntl')) {
-            return;
-        }
+        // Handle SIGTERM (kill command)
+        pcntl_signal(SIGTERM, [$this, 'handleSignal']);
 
-        $handler = function (int $signal) {
-            $signalNames = [
-                SIGTERM => 'SIGTERM',
-                SIGINT => 'SIGINT',
-                SIGHUP => 'SIGHUP',
-            ];
+        // Handle SIGINT (Ctrl+C)
+        pcntl_signal(SIGINT, [$this, 'handleSignal']);
 
-            $this->log('info', 'Received '.($signalNames[$signal] ?? "signal {$signal}").', initiating graceful shutdown');
-            $this->shouldShutdown = true;
-        };
+        // Handle SIGHUP (terminal closed)
+        pcntl_signal(SIGHUP, [$this, 'handleSignal']);
 
-        pcntl_signal(SIGTERM, $handler);
-        pcntl_signal(SIGINT, $handler);
-        pcntl_signal(SIGHUP, $handler);
-
+        // Enable async signal handling (PHP 7.1+)
         if (function_exists('pcntl_async_signals')) {
             pcntl_async_signals(true);
         }
@@ -572,14 +797,55 @@ class Amqp implements AmqpContract
         $this->signalHandlersRegistered = true;
     }
 
-    protected function generateCorrelationId(): string
+    /**
+     * Handle Unix signals
+     */
+    public function handleSignal(int $signal): void
     {
-        return uniqid('rpc_', true).'_'.mt_rand(1000, 9999);
+        $signalNames = [
+            SIGTERM => 'SIGTERM',
+            SIGINT => 'SIGINT',
+            SIGHUP => 'SIGHUP'
+        ];
+
+        $signalName = $signalNames[$signal] ?? "Signal $signal";
+        $this->log('info', "AMQP Service received $signalName, initiating graceful shutdown");
+
+        // Set shutdown flag to break out of consumer loops
+        $this->shouldShutdown = true;
+
+        // Close connections
+        $this->closeConnections();
     }
 
+    /**
+     * Handle shutdown function (fallback for various termination scenarios)
+     */
+    public function handleShutdown(): void
+    {
+        // Check if this is an error-based shutdown
+        $error = error_get_last();
+        if ($error && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR])) {
+            $this->log('error', 'AMQP Service: Fatal error occurred, closing connections', [
+                'error' => $error['message'],
+                'file' => $error['file'],
+                'line' => $error['line']
+            ]);
+        }
+
+        if ($this->connection !== null || !empty($this->channels)) {
+            $this->log('info', 'AMQP Service: Application shutting down, closing connections');
+            $this->shouldShutdown = true;
+            $this->closeConnections();
+        }
+    }
+
+    /**
+     * Log message with configured channel
+     */
     protected function log(string $level, string $message, array $context = []): void
     {
-        if (! ($this->config['logging']['enabled'] ?? true)) {
+        if (!($this->config['logging']['enabled'] ?? true)) {
             return;
         }
 

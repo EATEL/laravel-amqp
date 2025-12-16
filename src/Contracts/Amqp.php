@@ -2,81 +2,51 @@
 
 namespace Rev\Amqp\Contracts;
 
-use Closure;
-use PhpAmqpLib\Message\AMQPMessage;
-
 interface Amqp
 {
     /**
-     * Publish a message to an exchange.
+     * Publish a message to an exchange
      *
-     * @param  mixed  $payload  The payload to publish (will be JSON encoded)
-     * @param  string  $exchange  The exchange name
-     * @param  string  $routingKey  The routing key
-     * @param  array  $properties  Additional message properties
+     * @param mixed $payload The payload to publish (will be JSON encoded)
+     * @param string $exchange The exchange name
+     * @param string $routingKey The routing key
+     * @param array $messageProperties Additional message properties
+     * @param array $publishOptions Publish options (mandatory, etc.)
+     * @return void
      */
     public function publish(
         mixed $payload,
         string $exchange,
         string $routingKey = '',
-        array $properties = [],
+        array $messageProperties = [],
+        array $publishOptions = [],
     ): void;
 
     /**
-     * Publish a message directly to a queue (using default exchange).
+     * Consume messages from a queue
      *
-     * @param  mixed  $payload  The payload to publish (will be JSON encoded)
-     * @param  string  $queue  The queue name
-     * @param  array  $properties  Additional message properties
-     */
-    public function publishToQueue(
-        mixed $payload,
-        string $queue,
-        array $properties = [],
-    ): void;
-
-    /**
-     * Consume messages from a queue.
-     *
-     * The callback receives (array $payload, AMQPMessage $message).
-     * Return true to ack, false to stop consuming, throw to nack.
-     *
-     * @param  string  $queue  The queue name to consume from
-     * @param  Closure  $callback  The callback to process messages
-     * @param  array  $options  Consumer options (prefetch_count, timeout, on_error, consumer_tag)
+     * @param string $queue The queue name to consume from
+     * @param callable $callback The callback function to handle messages
+     * @param array $options Consumption options
+     * @return void
      */
     public function consume(
         string $queue,
-        Closure $callback,
+        callable $callback,
         array $options = [],
     ): void;
 
     /**
-     * Publish a message and wait for a response (RPC pattern).
+     * Get connection statistics
      *
-     * @param  mixed  $payload  The request payload
-     * @param  string  $exchange  The exchange name
-     * @param  string  $routingKey  The routing key
-     * @param  int  $timeout  Timeout in seconds
-     * @return mixed The response payload
+     * @return array
      */
-    public function rpc(
-        mixed $payload,
-        string $exchange,
-        string $routingKey,
-        int $timeout = 30,
-    ): mixed;
+    public function getStats(): array;
 
     /**
-     * Reply to an RPC request.
+     * Close all connections
      *
-     * @param  AMQPMessage  $request  The original request message
-     * @param  mixed  $response  The response payload
+     * @return void
      */
-    public function replyTo(AMQPMessage $request, mixed $response): void;
-
-    /**
-     * Close all connections gracefully.
-     */
-    public function disconnect(): void;
+    public function closeConnections(): void;
 }

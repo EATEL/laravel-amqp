@@ -42,7 +42,7 @@ class AmqpServiceProvider extends PackageServiceProvider
     {
         $this->app->terminating(function () {
             if ($this->app->resolved(AmqpContract::class)) {
-                $this->app->make(AmqpContract::class)->disconnect();
+                $this->app->make(AmqpContract::class)->closeConnections();
             }
         });
     }

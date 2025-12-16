@@ -7,13 +7,18 @@ A clean Laravel wrapper for direct AMQP messaging with RabbitMQ.
 Install the package via Composer:
 Add the following to the root of your `composer.json`:
 ```json
-        {
-            "type": "vcs",
-            "url": "https://github.com/eatel/laravel-amqp"
-        },
+"repositories": [
+    {
+        "type": "vcs",
+        "url": "https://github.com/eatel/laravel-amqp"
+    }
+]
 ```
+
+and then run
+
 ```bash
-composer require rev/laravel-amqp@1.0.0
+composer require rev/laravel-amqp@v1.1.0
 ```
 
 Publish the configuration file:

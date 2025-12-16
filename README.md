@@ -18,7 +18,7 @@ Add the following to the root of your `composer.json`:
 and then run
 
 ```bash
-composer require rev/laravel-amqp@1.2.0
+composer require rev/laravel-amqp@1.3.0
 ```
 
 Publish the configuration file:

@@ -133,7 +133,7 @@ class AmqpService implements AmqpContract
             // Dispatch publish event
             Event::dispatch(new MessagePublished($payload, $exchange, $routingKey, $messageProperties['message_id'], $messageProperties, $publishOptions));
         });
-        return $messageProperties['messageId'];
+        return $messageProperties['message_id'];
     }
 
     /**

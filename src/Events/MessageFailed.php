@@ -7,7 +7,7 @@ use PhpAmqpLib\Message\AMQPMessage;
 class MessageFailed
 {
     public function __construct(
-        public array $payload,
+        public mixed $payload,
         public AMQPMessage $message,
         public string $queue,
         public \Throwable $exception,

@@ -95,7 +95,7 @@ class AmqpService implements AmqpContract
 
 
     private function defaultMessageProperties(array $messageProperties = []):  array {
-        $messageId = Str::ulid();
+        $messageId = Str::ulid()->toString();
         return array_merge([
             'content_type' => 'application/json',
             'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,

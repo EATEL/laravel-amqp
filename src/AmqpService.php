@@ -179,7 +179,12 @@ class AmqpService implements AmqpContract
                     $body = $message->getBody();
                     // Check content type and parse accordingly
                     $contentType = $message->get('content_type');
-                    if ($contentType === 'application/json' || $contentType === null) {
+                    Log::info('Received AMQP message', [
+                        'body_size' => strlen($body),
+                        'routing_key' => $message->getRoutingKey(),
+                        'properties' => $message->get_properties(),
+                    ]);
+                    if (str_starts_with($contentType, 'application/json') || $contentType === null) {
                         try {
                             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
                         } catch (\JsonException $e) {

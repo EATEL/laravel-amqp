@@ -93,7 +93,6 @@ class AmqpService implements AmqpContract
         $this->setupCleanupHandlers();
     }
 
-
     private function defaultMessageProperties(array $messageProperties = []):  array {
         $messageId = Str::ulid()->toString();
         return array_merge([
@@ -614,7 +613,32 @@ class AmqpService implements AmqpContract
                     break;
                 }
             } catch (\Exception $e) {
-                // ... existing error handling ...
+               // Check for shutdown before handling the error
+                if ($this->shouldShutdown) {
+                    $this->log('info', "AMQP consumer shutting down due to signal");
+                    break;
+                }
+
+                $this->log('error', "AMQP consumer error", [
+                    'channel' => $channelId,
+                    'exception' => $e->getMessage(),
+                    'type' => get_class($e)
+                ]);
+
+                // Close the failed channel and connection
+                $this->closeChannel($channelId);
+                $this->closeConnection();
+
+                // Check if this is a retryable exception
+                if (!$this->shouldRetryException($e)) {
+                    throw $e;
+                }
+
+                $delay = $this->calculateBackoffDelay($this->retryAttempts + 1);
+                $this->log('info', "Consumer will retry in {$delay}s");
+
+                // Sleep with shutdown check
+                $this->sleepWithShutdownCheck($delay);
             }
         }
 

@@ -63,7 +63,8 @@ AMQP_RETRY_MAX_DELAY=30        # Default: 30
 AMQP_RETRY_MULTIPLIER=2        # Default: 2
 
 # Consumer defaults - All optional with defaults
-AMQP_PREFETCH_COUNT=1          # Default: 1
+AMQP_PREFETCH_COUNT=10         # Default: 10
+AMQP_PREFETCH_SIZE=0           # Default: 0 (no size limit)
 AMQP_CONSUME_TIMEOUT=0         # Default: 0
 AMQP_ON_ERROR=requeue          # Default: requeue
 
@@ -145,11 +146,58 @@ Amqp::consume('my_queue', function ($payload, $message) {
     'no_ack' => false,
     'exclusive' => false,
     'nowait' => false,
+    'prefetch_count' => 10,   // Max unacknowledged messages (default: 10)
+    'prefetch_size' => 0,     // Max unacknowledged message size in bytes (default: 0 = no limit)
+    'channel_id' => null,     // Custom channel ID (default: auto-generated per consumer)
     'heartbeat_check' => 30,  // Seconds between connection health checks
     'periodic_callback' => function () {
         // Optional: Called every second during consumption
         // Useful for periodic tasks like flushing logs, cleanup, etc.
     },
+]);
+```
+
+### Quality of Service (QoS)
+
+The `prefetch_count` and `prefetch_size` options control how many messages RabbitMQ will deliver to the consumer before requiring acknowledgment:
+
+**prefetch_count**: Limits the number of unacknowledged messages
+- Default: `1`
+- Higher values = better throughput but more memory usage
+- Lower values = slower but more controlled memory usage
+- Set to `1` for fair distribution across multiple consumers
+
+**prefetch_size**: Limits the total size of unacknowledged messages in bytes
+- Default: `0` (no size limit, only count-based limit)
+- Typically left at `0` unless you have specific size constraints
+
+**Example configurations:**
+
+```php
+// High throughput processing
+Amqp::consume('fast-queue', $callback, [
+    'prefetch_count' => 50,  // Process up to 50 messages concurrently
+]);
+
+// Memory-constrained processing
+Amqp::consume('heavy-queue', $callback, [
+    'prefetch_count' => 1,   // Process one message at a time
+]);
+
+// Fair distribution across multiple consumers
+Amqp::consume('shared-queue', $callback, [
+    'prefetch_count' => 1,   // Each consumer gets one message at a time
+]);
+```
+
+### Channel Isolation
+
+Each consumer automatically gets its own AMQP channel with isolated QoS settings. This prevents conflicts when running multiple consumers in the same process (though typically each consumer runs in its own process).
+
+You can optionally specify a custom channel ID:
+```php
+Amqp::consume('my-queue', $callback, [
+    'channel_id' => 'my-custom-channel',
 ]);
 ```
 
@@ -197,6 +245,37 @@ class ProcessMessages extends Command
 - It runs even when no messages are being received
 - Exceptions thrown in the callback are caught and logged, but won't stop the consumer
 - The callback should be lightweight to avoid impacting message processing performance
+
+## Graceful Shutdown
+
+Consumers handle shutdown signals (SIGTERM, SIGINT, SIGHUP) gracefully:
+
+1. When a shutdown signal is received, the consumer stops accepting new messages
+2. The currently processing message is allowed to complete
+3. The message is acknowledged (not redelivered)
+4. The consumer exits cleanly
+
+**Example:**
+```bash
+# Start consumer
+php artisan amqp:consume my_queue
+
+# In another terminal, send shutdown signal
+kill -TERM <pid>
+
+# Consumer output:
+# [AMQP] AMQP Service received SIGTERM, initiating graceful shutdown
+# [Current message finishes processing...]
+# [AMQP] Stopped consuming from queue 'my_queue'
+# [AMQP] AMQP Service: Application shutting down, closing connections
+```
+
+**Maximum shutdown delay:** ~1 second (based on the internal wait timeout)
+
+**What happens to unprocessed messages:**
+- Messages already delivered but not yet processed (in prefetch buffer) are returned to the queue
+- They will be redelivered to other consumers or to the same consumer when it restarts
+- The currently processing message completes and is acknowledged before shutdown
 
 ## Event-Based Logging
 
@@ -279,3 +358,5 @@ The package consists of:
 - `Rev\Amqp\AmqpServiceProvider` - Service provider registration
 - Automatic reconnection with exponential backoff
 - Signal handling for graceful shutdown
+- QoS (Quality of Service) management per consumer
+- Channel isolation for multiple consumers

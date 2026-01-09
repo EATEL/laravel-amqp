@@ -158,13 +158,37 @@ class AmqpService implements AmqpContract
             'nowait' => false,
             'heartbeat_check' => 30,
             'periodic_callback' => null,
+            'prefetch_count' => 1,
+            'prefetch_size' => 0,
+            'channel_id' => null,
         ];
 
         $options = array_merge($defaultOptions, $options);
 
         Event::dispatch(new ConsumerStarted($queue, $options));
 
+        $channelId = $options['channel_id'] ?? $this->generateChannelId('consumer_' . $queue);
+
         $this->executeConsumer(function (AMQPChannel $channel) use ($queue, $callback, $options) {
+            try {
+                $channel->basic_qos(
+                    prefetch_size: $options['prefetch_size'],
+                    prefetch_count: $options['prefetch_count'],
+                    a_global: false
+                );
+                
+                $this->log('debug', "Set QoS for consumer", [
+                    'queue' => $queue,
+                    'prefetch_count' => $options['prefetch_count'],
+                    'prefetch_size' => $options['prefetch_size']
+                ]);
+            } catch (\Exception $e) {
+                $this->log('error', "Failed to set QoS", [
+                    'error' => $e->getMessage(),
+                    'queue' => $queue
+                ]);
+                throw $e;
+            }
             // Wrap the user callback to handle JSON decoding and return value
             $wrappedCallback = function (AMQPMessage $message) use ($callback, $options, $queue, $channel) {
                 try {
@@ -179,7 +203,7 @@ class AmqpService implements AmqpContract
                     $body = $message->getBody();
                     // Check content type and parse accordingly
                     $contentType = $message->get('content_type');
-                    Log::info('Received AMQP message', [
+                    $this->log('info', 'Received AMQP message', [
                         'body_size' => strlen($body),
                         'routing_key' => $message->getRoutingKey(),
                         'properties' => $message->get_properties(),
@@ -268,7 +292,7 @@ class AmqpService implements AmqpContract
             }
 
             $this->log('info', "Stopped consuming from queue '$queue'");
-        }, 'consumer', $options['heartbeat_check']);
+        }, $channelId, $options['heartbeat_check']);
 
         Event::dispatch(new ConsumerStopped($queue));
     }
@@ -324,6 +348,11 @@ class AmqpService implements AmqpContract
      */
     private function getChannel(string $channelId = 'default'): AMQPChannel
     {
+        // If channelId is 'auto', generate a unique one
+        if ($channelId === 'auto') {
+            $channelId = $this->generateChannelId();
+        }
+
         // Return existing healthy channel
         if (isset($this->channels[$channelId]) && $this->isChannelHealthyInternal($channelId)) {
             return $this->channels[$channelId];
@@ -534,6 +563,13 @@ class AmqpService implements AmqpContract
         return !in_array($host, ['localhost', '127.0.0.1']);
     }
 
+    /**
+     * Generate unique channel ID
+     */
+    private function generateChannelId(string $prefix = 'channel'): string
+    {
+        return $prefix . '_' . getmypid();
+    }
     /**
      * Execute a callback with automatic reconnection using a channel
      */
@@ -853,8 +889,6 @@ class AmqpService implements AmqpContract
         // Set shutdown flag to break out of consumer loops
         $this->shouldShutdown = true;
 
-        // Close connections
-        $this->closeConnections();
     }
 
     /**

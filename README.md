@@ -16,13 +16,11 @@ Add the following to the root of your `composer.json`:
 ```
 
 and then run
-
 ```bash
 composer require rev/laravel-amqp@1.6.0
 ```
 
 Publish the configuration file:
-
 ```bash
 php artisan vendor:publish --provider="Rev\Amqp\AmqpServiceProvider"
 ```
@@ -36,7 +34,6 @@ To upgrade:
 ## Configuration
 
 Configure your RabbitMQ connection using environment variables. Either `AMQP_URL` or `AMQP_HOST` is required.
-
 ```env
 # Connection URL (recommended) - Required if not using individual settings
 AMQP_URL=amqp://user:password@host:port/vhost
@@ -78,7 +75,6 @@ AMQP_LOG_CHANNEL=              # Optional
 ## Publishing Messages
 
 Use the `Amqp` facade to publish messages to an exchange:
-
 ```php
 use Rev\Amqp\Amqp;
 
@@ -108,7 +104,6 @@ The payload will be automatically JSON-encoded.
 ## Consuming Messages
 
 Use the `Amqp` facade to consume messages from a queue:
-
 ```php
 use Rev\Amqp\Amqp;
 
@@ -125,7 +120,6 @@ Amqp::consume('my_queue', function (array $payload, \PhpAmqpLib\Message\AMQPMess
 ### Message Acknowledgment
 
 Messages are automatically acknowledged after successful processing. To reject a message, throw an exception from the callback:
-
 ```php
 Amqp::consume('my_queue', function (array $payload, \PhpAmqpLib\Message\AMQPMessage $message) {
     if ($payload['invalid']) {
@@ -141,7 +135,6 @@ Amqp::consume('my_queue', function (array $payload, \PhpAmqpLib\Message\AMQPMess
 ### Consumer Options
 
 Pass options to customize consumer behavior:
-
 ```php
 Amqp::consume('my_queue', function ($payload, $message) {
     // Process message
@@ -152,8 +145,58 @@ Amqp::consume('my_queue', function ($payload, $message) {
     'no_ack' => false,
     'exclusive' => false,
     'nowait' => false,
+    'heartbeat_check' => 30,  // Seconds between connection health checks
+    'periodic_callback' => function () {
+        // Optional: Called every second during consumption
+        // Useful for periodic tasks like flushing logs, cleanup, etc.
+    },
 ]);
 ```
+
+### Periodic Callbacks
+
+The `periodic_callback` consumer option allows you to execute code periodically during message consumption. This callback is invoked approximately once per second while the consumer is running, regardless of message volume.
+
+**Common use cases:**
+- Flushing log buffers (e.g., Sentry)
+- Memory cleanup
+- Health checks
+- Progress indicators
+
+**Example: Periodic log flushing**
+```php
+class ProcessMessages extends Command
+{
+    protected $lastFlushTime = null;
+
+    public function handle(): int
+    {
+        Amqp::consume(
+            queue: 'my_queue',
+            callback: function ($payload, $message) {
+                // Process messages
+                return true;
+            },
+            options: [
+                'periodic_callback' => function () {
+                    $currentTime = time();
+                    // Flush logs every 60 seconds
+                    if (!$this->lastFlushTime || $currentTime - $this->lastFlushTime >= 60) {
+                        \Sentry\logger()->flush();
+                        $this->lastFlushTime = $currentTime;
+                    }
+                },
+            ]
+        );
+    }
+}
+```
+
+**Important notes:**
+- The callback runs every ~1 second (based on the AMQP timeout)
+- It runs even when no messages are being received
+- Exceptions thrown in the callback are caught and logged, but won't stop the consumer
+- The callback should be lightweight to avoid impacting message processing performance
 
 ## Event-Based Logging
 
@@ -217,7 +260,6 @@ Events provide maximum flexibility - applications can implement any logging logi
 ## Available Commands
 
 The package provides several Artisan commands:
-
 ```bash
 # Install the package (publish config)
 php artisan amqp:install

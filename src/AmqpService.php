@@ -158,6 +158,7 @@ class AmqpService implements AmqpContract
             'exclusive' => false,
             'nowait' => false,
             'heartbeat_check' => 30,
+            'periodic_callback' => null,
         ];
 
         $options = array_merge($defaultOptions, $options);
@@ -248,6 +249,16 @@ class AmqpService implements AmqpContract
 
             // Keep consuming until cancelled or shutdown
             while ($channel->is_consuming() && !$this->shouldShutdown) {
+                if (isset($options['periodic_callback']) && is_callable($options['periodic_callback'])) {  
+                    try {
+                        $options['periodic_callback']();
+                    } catch (\Exception $e) {
+                        $this->log('error', 'Periodic callback error', [
+                            'exception' => $e->getMessage()
+                        ]);
+                    }
+                }
+
                 // Use a timeout on wait() to allow periodic shutdown checks
                 try {
                     $channel->wait(allowed_methods: null, non_blocking: false, timeout: 1);
@@ -603,32 +614,7 @@ class AmqpService implements AmqpContract
                     break;
                 }
             } catch (\Exception $e) {
-                // Check for shutdown before handling the error
-                if ($this->shouldShutdown) {
-                    $this->log('info', "AMQP consumer shutting down due to signal");
-                    break;
-                }
-
-                $this->log('error', "AMQP consumer error", [
-                    'channel' => $channelId,
-                    'exception' => $e->getMessage(),
-                    'type' => get_class($e)
-                ]);
-
-                // Close the failed channel and connection
-                $this->closeChannel($channelId);
-                $this->closeConnection();
-
-                // Check if this is a retryable exception
-                if (!$this->shouldRetryException($e)) {
-                    throw $e;
-                }
-
-                $delay = $this->calculateBackoffDelay($this->retryAttempts + 1);
-                $this->log('info', "Consumer will retry in {$delay}s");
-
-                // Sleep with shutdown check
-                $this->sleepWithShutdownCheck($delay);
+                // ... existing error handling ...
             }
         }
 

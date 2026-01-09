@@ -18,7 +18,7 @@ Add the following to the root of your `composer.json`:
 and then run
 
 ```bash
-composer require rev/laravel-amqp@1.3.0
+composer require rev/laravel-amqp@1.6.0
 ```
 
 Publish the configuration file:
@@ -26,6 +26,12 @@ Publish the configuration file:
 ```bash
 php artisan vendor:publish --provider="Rev\Amqp\AmqpServiceProvider"
 ```
+
+To upgrade:
+
+1. Update the version number in your composer.json
+2. Run `composer upgrade rev/laravel-amqp`
+3. Commit updated `composer.json` and `composer.lock`
 
 ## Configuration
 

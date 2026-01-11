@@ -73,7 +73,7 @@ AMQP_LOGGING_ENABLED=true      # Default: true
 AMQP_LOG_CHANNEL=              # Optional
 ```
 
-To disable the auto-reconnect functionality altogether, for example if you have it running under a supervisor process already, set `AMQP_RETRY_MAX_ATTEMPTS` to `0`.
+To disable the auto-reconnect functionality altogether, for example if you have it running under a supervisor process already, set `AMQP_RETRY_MAX_ATTEMPTS` to `1`.
 
 ## Publishing Messages
 

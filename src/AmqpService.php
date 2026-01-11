@@ -430,6 +430,9 @@ class AmqpService implements AmqpContract
     {
         $attempts = $this->retryAttempts;
         $maxAttempts = $this->retryConfig['max_attempts'];
+        if ($maxAttempts < 1) {
+            throw new \InvalidArgumentException("max_attempts must be at least 1");
+        }
 
         while ($attempts < $maxAttempts && !$this->shouldShutdown) {
             try {

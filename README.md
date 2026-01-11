@@ -57,7 +57,7 @@ AMQP_SSL_VERIFY_PEER=true      # Default: true
 AMQP_SSL_CAFILE=/path/to/ca-cert.pem  # Optional
 
 # Retry configuration - All optional with defaults
-AMQP_RETRY_MAX_ATTEMPTS=5      # Default: 5
+AMQP_RETRY_MAX_ATTEMPTS=5      # Default: 5; See note below
 AMQP_RETRY_INITIAL_DELAY=1     # Default: 1
 AMQP_RETRY_MAX_DELAY=30        # Default: 30
 AMQP_RETRY_MULTIPLIER=2        # Default: 2
@@ -72,6 +72,8 @@ AMQP_ON_ERROR=requeue          # Default: requeue
 AMQP_LOGGING_ENABLED=true      # Default: true
 AMQP_LOG_CHANNEL=              # Optional
 ```
+
+To disable the auto-reconnect functionality altogether, for example if you have it running under a supervisor process already, set `AMQP_RETRY_MAX_ATTEMPTS` to `1`.
 
 ## Publishing Messages
 

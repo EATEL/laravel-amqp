@@ -95,6 +95,12 @@ class AmqpService implements AmqpContract
 
     private function defaultMessageProperties(array $messageProperties = []):  array {
         $messageId = Str::ulid()->toString();
+        if(array_key_exists('application_headers', $messageProperties)) {
+            $messageProperties['application_headers'] = new \PhpAmqpLib\Wire\AMQPTable($messageProperties['application_headers']);
+        }
+        if(array_key_exists('headers', $messageProperties)) {
+            $messageProperties['headers'] = new \PhpAmqpLib\Wire\AMQPTable($messageProperties['headers']);
+        }
         return array_merge([
             'content_type' => 'application/json',
             'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
